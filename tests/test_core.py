@@ -103,25 +103,25 @@ class TestHexagram:
 
     def test_qian_all_yang(self):
         qian = hexagram_from_bits(0b111111)
-        assert qian.name == "乾"
+        assert qian.name == "乾为天"
         for line in qian.lines:
             assert line.is_yang
 
     def test_kun_all_yin(self):
         kun = hexagram_from_bits(0b000000)
-        assert kun.name == "坤"
+        assert kun.name == "坤为地"
         for line in kun.lines:
             assert line.is_yin
 
     def test_mutate_single_yao(self):
         qian = hexagram_from_bits(0b111111)
         gou = qian.mutate(0b000001)
-        assert gou.name == "姤"
+        assert gou.name == "天风姤"
 
     def test_mutate_all_yao(self):
         qian = hexagram_from_bits(0b111111)
         kun = qian.mutate(0b111111)
-        assert kun.name == "坤"
+        assert kun.name == "坤为地"
 
     def test_mutate_is_closed(self):
         for h in all_hexagrams():
@@ -132,25 +132,25 @@ class TestHexagram:
     def test_interlock(self):
         qian = hexagram_from_bits(0b111111)
         inter = qian.interlock()
-        assert inter.name == "乾"
+        assert inter.name == "乾为天"
 
     def test_reverse(self):
         qian = hexagram_from_bits(0b111111)
         rev = qian.reverse()
-        assert rev.name == "乾"
+        assert rev.name == "乾为天"
 
-        tai = hexagram_from_name("泰")
-        pi = hexagram_from_name("否")
+        tai = hexagram_from_name("地天泰")
+        pi = hexagram_from_name("天地否")
         assert tai.reverse() == pi
         assert pi.reverse() == tai
 
     def test_complement(self):
         qian = hexagram_from_bits(0b111111)
         comp = qian.complement()
-        assert comp.name == "坤"
+        assert comp.name == "坤为地"
 
         kun = hexagram_from_bits(0b000000)
-        assert kun.complement().name == "乾"
+        assert kun.complement().name == "乾为天"
 
     def test_complement_is_involution(self):
         for h in all_hexagrams():

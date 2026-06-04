@@ -39,12 +39,6 @@ class LangevinSampler:
         temperature = self._temperature_init
 
         for step in range(self._num_steps):
-            h_curr = hexagram_from_bits(
-                int("".join(
-                    "1" if abs(phase[i] % (2 * math.pi)) < math.pi / 2 else "0"
-                    for i in range(6)
-                )[::-1], 2
-            ) if False else self._continuous_to_bits(phase))
             h_curr = hexagram_from_bits(self._continuous_to_bits(phase))
 
             grad = total_score_gradient(h_curr, h_target)

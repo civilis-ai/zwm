@@ -122,3 +122,36 @@ MUTATION_TYPE_NAMES: dict[int, str] = {
     1: "初爻变", 2: "二爻变", 4: "三爻变",
     8: "四爻变", 16: "五爻变", 32: "上爻变",
 }
+
+# 八宫 (8 Palace) mapping: normal_order → palace_trigram_index
+# Each palace's pure trigram determines its element.
+# Palace trigram indices match Trigram.index convention.
+_HEXAGRAM_TO_PALACE: tuple[int, ...] = (
+    0, 0, 2, 0, 3, 2, 1, 0,   #  0- 7: 坤 坤 坎 坤 兑 坎 震 坤
+    1, 1, 1, 3, 3, 2, 1, 0,   #  8-15: 震 震 震 兑 兑 坎 震 坤
+    0, 2, 2, 2, 3, 2, 1, 0,   # 16-23: 坤 坎 坎 坎 兑 坎 震 坤
+    3, 1, 3, 3, 3, 2, 1, 0,   # 24-31: 兑 震 兑 兑 兑 坎 震 坤
+    7, 6, 5, 4, 4, 4, 6, 4,   # 32-39: 乾 巽 离 艮 艮 艮 巽 艮
+    7, 6, 5, 4, 5, 5, 5, 7,   # 40-47: 乾 巽 离 艮 离 离 离 乾
+    7, 6, 5, 4, 4, 6, 6, 6,   # 48-55: 乾 巽 离 艮 艮 巽 巽 巽
+    7, 6, 5, 4, 7, 5, 7, 7,   # 56-63: 乾 巽 离 艮 乾 离 乾 乾
+)
+
+# 日干 → 五行: Day Heavenly Stem to Element
+# Based on the 十天干 (10 Heavenly Stems) elemental assignments
+GAN_ELEMENT: dict[str, str] = {
+    "甲": "木", "乙": "木",
+    "丙": "火", "丁": "火",
+    "戊": "土", "己": "土",
+    "庚": "金", "辛": "金",
+    "壬": "水", "癸": "水",
+}
+
+# 卦宫五行: Palace trigram index → element
+PALACE_ELEMENT: dict[int, str] = {
+    7: "金", 3: "金",   # 乾, 兑
+    5: "火",             # 离
+    1: "木", 6: "木",   # 震, 巽
+    2: "水",             # 坎
+    4: "土", 0: "土",   # 艮, 坤
+}

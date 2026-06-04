@@ -34,27 +34,36 @@ class InterferenceResult:
 
 
 def compute_interference(spectrum: FrequencySpectrum) -> InterferenceResult:
+    pv = spectrum.phase_vector
     components = spectrum.harmonic_profile()
+
     real_sum, imag_sum = spectrum.resonance_components()
 
-    amplitude_values = [amp for _, amp in components]
+    # Signed amplitudes: yang(+w) or yin(-w), preserving phase sign
+    signed_amps = [
+        w * p.value.real
+        for p, w in zip(pv.phases, pv.weights)
+    ]
+
     constructive_count = sum(
-        1 for a, b in zip(amplitude_values, amplitude_values[1:])
+        1 for a, b in zip(signed_amps, signed_amps[1:])
         if a * b > 0
     )
     destructive_count = sum(
-        1 for a, b in zip(amplitude_values, amplitude_values[1:])
+        1 for a, b in zip(signed_amps, signed_amps[1:])
         if a * b < 0
     )
-    total_pairs = len(amplitude_values) - 1 or 1
+    total_pairs = len(signed_amps) - 1 or 1
     constructive_ratio = constructive_count / total_pairs
     destructive_ratio = destructive_count / total_pairs
 
+    # Dominant harmonic by absolute amplitude
     dominant_harmonic = max(components, key=lambda x: x[1])[0]
 
+    # Phase coherence via circular variance of actual phase angles
     phase_angles = [
-        math.atan2(0, amp) if amp > 0 else math.atan2(0, -amp)
-        for _, amp in components
+        math.atan2(p.value.imag, p.value.real)
+        for p in pv.phases
     ]
     if len(phase_angles) >= 2:
         phase_diffs = [

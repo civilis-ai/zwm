@@ -27,13 +27,23 @@ class UnifiedField:
         grid: LuoshuGrid,
         time_phase: float = 0.0,
         calendar_context: dict | None = None,
+        day_gan: str | None = None,
     ) -> UnifiedField:
         from zwm.self_field.harmony import compute_self_field
 
         chain = FiveHexagramChain.from_current(h)
-        relations = determine_six_relations(h, grid)
+        relations = determine_six_relations(h, grid, day_gan=day_gan)
         elem_profile = hexagram_element_profile(h)
-        time_pots = {p: 0.5 for p in range(1, 10)}
+
+        # Derive time potentials from calendar_context if available;
+        # otherwise use Luoshu self-field with harmonic defaults.
+        if calendar_context:
+            time_pots = {
+                p: calendar_context.get(str(p), 0.5)
+                for p in range(1, 10)
+            }
+        else:
+            time_pots = {p: 0.5 for p in range(1, 10)}
         luoshu_field = compute_self_field(h, grid, time_pots)
 
         return cls(
@@ -52,6 +62,7 @@ class UnifiedField:
         mutation_mask: int,
         new_time_phase: float | None = None,
         new_grid_position: int | None = None,
+        day_gan: str | None = None,
     ) -> UnifiedField:
         chain = FiveHexagramChain.with_evolution(self.hexagram, mutation_mask)
         grid = self.grid
@@ -66,7 +77,10 @@ class UnifiedField:
             grid=grid,
             time_phase=new_time,
             calendar_context=self.calendar_context,
-            six_relations=determine_six_relations(chain.evolved, grid),
+            six_relations=determine_six_relations(
+                chain.evolved, grid,
+                day_gan=day_gan,
+            ),
             element_profile=hexagram_element_profile(chain.evolved),
             luoshu_field=self.luoshu_field,
         )

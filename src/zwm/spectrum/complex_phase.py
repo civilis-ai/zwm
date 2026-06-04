@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import override
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,7 +72,7 @@ class HexagramPhaseVector:
     @classmethod
     def from_bits(cls, bits: int) -> HexagramPhaseVector:
         phases = tuple(
-            YANG_PHASE if (bits >> (5 - i)) & 1 else YIN_PHASE
+            YANG_PHASE if (bits >> i) & 1 else YIN_PHASE
             for i in range(6)
         )
         return cls(phases)
@@ -82,12 +81,12 @@ class HexagramPhaseVector:
         bits = 0
         for i, p in enumerate(self.phases):
             if p.is_yang:
-                bits |= 1 << (5 - i)
+                bits |= 1 << i
         return bits
 
     def mutate(self, mask: int) -> HexagramPhaseVector:
         new_phases = tuple(
-            p.flip() if (mask >> (5 - i)) & 1 else p
+            p.flip() if (mask >> i) & 1 else p
             for i, p in enumerate(self.phases)
         )
         return HexagramPhaseVector(new_phases, self.weights)
