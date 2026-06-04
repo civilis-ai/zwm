@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "zwm"
+version = "0.1.0"
+description = "天地人三才世界模型规划器 — Trinity World Model Planner based on I Ching mathematics"
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [
+    {name = "civilis-ai"}
+]
+keywords = [
+    "world-model", "planner", "i-ching", "hexagram",
+    "embodied-ai", "active-inference", "jepa", "vsa",
+]
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Intended Audience :: Science/Research",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+dependencies = [
+    "numpy>=1.26",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=4.1",
+]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = ["-v", "--cov=zwm", "--cov-report=term-missing"]
