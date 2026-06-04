@@ -65,7 +65,9 @@ class HexagramPhaseVector:
     def from_hexagram(cls, hexagram) -> HexagramPhaseVector:
         from zwm.core.hexagram import Hexagram
         if isinstance(hexagram, Hexagram):
-            return cls(tuple(line.complex_phase for line in hexagram.lines))
+            return cls(tuple(
+                ComplexPhase(line.complex_phase) for line in hexagram.lines
+            ))
         raise TypeError(f"Expected Hexagram, got {type(hexagram)}")
 
     @classmethod

@@ -64,11 +64,11 @@ ELEMENT_REVERSE_CONTROL: dict[str, str] = {
 }
 
 TRIGRAM_ELEMENTS: dict[int, str] = {
-    0: "金", 1: "金",
-    2: "火",
-    3: "木", 4: "木",
-    5: "水",
-    6: "土", 7: "土",
+    7: "金", 3: "金",
+    5: "火",
+    1: "木", 6: "木",
+    2: "水",
+    4: "土", 0: "土",
 }
 
 YAO_WEIGHTS: tuple[float, ...] = (1.0, 0.9, 0.7, 0.5, 0.3, 0.2)
