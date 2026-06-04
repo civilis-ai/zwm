@@ -25,24 +25,29 @@ def epistemic_value(
     grid: LuoshuGrid,
     visit_counts: dict[int, int],
     total_visits: int = 1,
+    palace_visit_counts: dict[int, int] | None = None,
 ) -> float:
-    from zwm.core.hexagram import all_hexagrams
+    """Information-seeking value: curiosity over states + unexplored palaces.
+
+    ``visit_counts`` is keyed by hexagram identity (normal_order, 0-63) and
+    drives the state-novelty term. ``palace_visit_counts`` is keyed by palace
+    position (1-9) and drives the unexplored-palace bonus. These are kept in
+    separate dicts on purpose — their key spaces overlap (1-9), so conflating
+    them silently corrupts the palace term.
+    """
     from zwm.self_field.harmony import luoshu_harmony
+
+    palace_visit_counts = palace_visit_counts or {}
 
     unknown_bonus = 0.0
     for pos in range(1, 10):
         if pos == grid.self_position:
             continue
-        visits = visit_counts.get(pos, 0)
-        if visits == 0:
+        if palace_visit_counts.get(pos, 0) == 0:
             unknown_bonus += 0.1 * luoshu_harmony(h, grid, pos)
 
-    try:
-        h_bits = h.normal_order
-        h_visits = visit_counts.get(h_bits, 0)
-        novelty = 1.0 / (1.0 + h_visits / max(total_visits, 1))
-    except (ZeroDivisionError, OverflowError):
-        novelty = 1.0
+    h_visits = visit_counts.get(h.normal_order, 0)
+    novelty = 1.0 / (1.0 + h_visits / max(total_visits, 1))
 
     return float(unknown_bonus + 0.2 * novelty)
 
@@ -54,9 +59,12 @@ def expected_free_energy(
     visit_counts: dict[int, int],
     total_visits: int = 1,
     beta_curiosity: float = 0.3,
+    palace_visit_counts: dict[int, int] | None = None,
 ) -> float:
     pragmatic = pragmatic_value(h, grid, target_palace)
-    epistemic = epistemic_value(h, grid, visit_counts, total_visits)
+    epistemic = epistemic_value(
+        h, grid, visit_counts, total_visits, palace_visit_counts
+    )
     return float(pragmatic + beta_curiosity * epistemic)
 
 

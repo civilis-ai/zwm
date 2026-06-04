@@ -58,6 +58,19 @@ class TrinityPlanner:
         self._mcts_iterations = mcts_iterations
         self._exploration_weight = exploration_weight
         self._efe_beta = efe_beta
+        # Persistent epistemic state: hexagram visit history accumulated
+        # across every MCTS simulation and across successive plan() calls.
+        # This is what makes the EFE epistemic term a live signal instead
+        # of a constant.
+        self._visit_counts: dict[int, int] = {}
+        self._total_visits: int = 0
+        # Palace-space exploration history (keyed by palace position 1-9),
+        # supplied per-plan by the agent's multi-scale topology scaffold.
+        self._palace_visits: dict[int, int] = {}
+
+    @property
+    def visit_counts(self) -> dict[int, int]:
+        return self._visit_counts
 
     # ------------------------------------------------------------------
     # Main planning entry point
@@ -70,21 +83,29 @@ class TrinityPlanner:
         top_k: int = 5,
         target_palace: int | None = None,
         day_gan: str | None = None,
+        preference_weights: dict[str, float] | None = None,
+        mask_priors: list[int] | None = None,
+        palace_visit_counts: dict[int, int] | None = None,
     ) -> PlanResult:
         if grid is None:
             grid = LuoshuGrid()
 
-        # MoE evaluation — now influences scoring
+        self._palace_visits = palace_visit_counts or {}
+
+        # MoE evaluation — now influences scoring, optionally biased by the
+        # agent's learned expert preferences.
         moe_score = self._moe.evaluate(
             h_current, grid,
             time_phase=time_phase,
             target_palace=target_palace or grid.self_position,
+            preference_weights=preference_weights,
         )
         active = self._moe.active_experts(h_current, grid, time_phase)
 
         if self._use_mcts:
             scores = self._mcts_search(
                 h_current, grid, time_phase, target_palace, day_gan,
+                mask_priors=mask_priors,
             )
         else:
             scores = self._sampler.top_k_mutations(h_current, k=top_k)
@@ -121,9 +142,10 @@ class TrinityPlanner:
         time_phase: float,
         target_palace: int | None,
         day_gan: str | None,
+        mask_priors: list[int] | None = None,
     ) -> list[tuple[Hexagram, int, float]]:
         root = _MCTSNode(hex_bits=h_current.normal_order)
-        root.untried_masks = list(range(1, 64))
+        root.untried_masks = self._ordered_masks(h_current, mask_priors)
 
         for _ in range(self._mcts_iterations):
             node = self._select(root)
@@ -140,6 +162,57 @@ class TrinityPlanner:
             results.append((h, mask, child.value))
         results.sort(key=lambda x: x[2], reverse=True)
         return results[:5]
+
+    def _ordered_masks(
+        self,
+        h_current: Hexagram,
+        mask_priors: list[int] | None,
+    ) -> list[int]:
+        """Build the untried-mask list so expansion explores best-first.
+
+        ``untried_masks`` is consumed via ``.pop()`` (tail first), so the
+        highest-priority mask must sit at the tail. Priority is:
+          1. externally supplied priors, in the order given (Hebbian/memory),
+          2. then the Langevin score surface, best first.
+        """
+        ranked = self._sampler.top_k_mutations(h_current, k=63)  # desc by score
+        langevin_desc = [mask for _h, mask, _score in ranked]
+
+        # De-duplicate priors, preserving caller priority order.
+        priors: list[int] = []
+        seen: set[int] = set()
+        for m in (mask_priors or []):
+            if 1 <= m <= 63 and m not in seen:
+                seen.add(m)
+                priors.append(m)
+
+        non_prior_desc = [m for m in langevin_desc if m not in seen]
+
+        # Tail = highest priority. Lay down worst Langevin first, then priors in
+        # reverse so priors[0] (top Hebbian/memory pick) is the very last element
+        # and is therefore popped first.
+        return list(reversed(non_prior_desc)) + list(reversed(priors))
+
+    def reinforce_expert(
+        self,
+        h: Hexagram,
+        grid: LuoshuGrid,
+        time_phase: float,
+        expert_index: int,
+        weight: float = 1.0,
+    ) -> float:
+        """Public hook: take one router gradient step toward ``expert_index``.
+
+        Lets the agent reinforce the rewarded expert without reaching into the
+        planner's private MoE internals.
+        """
+        return self._moe.router.train_toward(
+            h, grid, time_phase, expert_index=expert_index, weight=weight
+        )
+
+    @property
+    def expert_names(self) -> list[str]:
+        return self._moe.expert_names
 
     def _select(self, node: _MCTSNode) -> _MCTSNode:
         while not node.untried_masks and node.children:
@@ -185,6 +258,13 @@ class TrinityPlanner:
         while node is not None:
             node.visits += 1
             node.total_value += reward
+            # Record the visit in the planner's persistent epistemic memory,
+            # keyed by hexagram identity, so EFE's curiosity term reflects
+            # how often each state has actually been explored.
+            self._visit_counts[node.hex_bits] = (
+                self._visit_counts.get(node.hex_bits, 0) + 1
+            )
+            self._total_visits += 1
             node = node.parent
 
     # ------------------------------------------------------------------
@@ -200,16 +280,14 @@ class TrinityPlanner:
     ) -> float:
         from zwm.self_field.efe import expected_free_energy
 
-        visit_counts: dict[int, int] = {}
-        total_visits = 1
-
         return expected_free_energy(
             h=h,
             grid=grid,
             target_palace=target_palace or grid.self_position,
-            visit_counts=visit_counts,
-            total_visits=total_visits,
+            visit_counts=self._visit_counts,
+            total_visits=max(self._total_visits, 1),
             beta_curiosity=self._efe_beta,
+            palace_visit_counts=self._palace_visits,
         )
 
     # ------------------------------------------------------------------
@@ -219,19 +297,7 @@ class TrinityPlanner:
     def _blend(efe_score: float, moe_score: float) -> float:
         return 0.55 * float(efe_score) + 0.45 * float(moe_score)
 
-    # ------------------------------------------------------------------
-    # OODA loop (Observe → Predict → Evaluate → Act)
-    # ------------------------------------------------------------------
-    def observe_predict_evaluate_act(
-        self,
-        h_current: Hexagram,
-        grid: LuoshuGrid | None = None,
-        time_phase: float = 0.0,
-        target_palace: int | None = None,
-        day_gan: str | None = None,
-    ) -> PlanResult:
-        """Full OODA planning loop with EFE evaluation and MoE weighting."""
-        return self.plan(
-            h_current, grid=grid, time_phase=time_phase,
-            target_palace=target_palace, day_gan=day_gan,
-        )
+    # NOTE: the full Observe → Predict → Evaluate → Act → Learn loop lives in
+    # ``zwm.planner.agent.TrinityAgent``. TrinityPlanner is intentionally a
+    # stateless single-step evaluator (``plan``); it does not own perception,
+    # memory, or learning state.

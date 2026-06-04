@@ -24,14 +24,34 @@ class SparseMoE:
             "element", "risk", "narrative",
         ]
 
+    @property
+    def router(self) -> MoERouter:
+        return self._router
+
+    @property
+    def expert_names(self) -> list[str]:
+        return list(self._expert_names)
+
     def evaluate(
         self,
         h: Hexagram,
         grid: LuoshuGrid,
         time_phase: float,
         target_palace: int,
+        preference_weights: dict[str, float] | None = None,
     ) -> float:
         weights = self._router.route(h, grid, time_phase)
+        if preference_weights is not None:
+            pref = np.array(
+                [preference_weights.get(name, 0.0) for name in self._expert_names],
+                dtype=np.float32,
+            )
+            # Multiplicatively bias the learned router by the agent's
+            # accumulated expert preferences, then renormalise.
+            weights = weights * (1.0 + pref)
+            total = weights.sum()
+            if total > 1e-10:
+                weights = weights / total
         threshold = np.sort(weights)[-self._top_k]
         mask = weights >= threshold
 

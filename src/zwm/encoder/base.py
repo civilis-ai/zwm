@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from abc import ABC, abstractmethod
 
 from zwm.core.hexagram import Hexagram
@@ -30,12 +31,32 @@ class RuleBasedEncoder(HexagramEncoder):
         from zwm.core.yao import YANG, YIN
         from zwm.core.hexagram import Hexagram
 
+        self._validate(sensor_data)
+
         lines = [YIN] * 6
         for feature, (yao_idx, mapper) in self._feature_mapping.items():
-            if feature in sensor_data:
-                lines[yao_idx] = YANG if mapper(sensor_data[feature]) else YIN
+            lines[yao_idx] = YANG if mapper(sensor_data[feature]) else YIN
 
         return Hexagram(*lines)
+
+    def _validate(self, sensor_data: dict) -> None:
+        """Fail fast at the perception boundary.
+
+        Every expected sensor must be present and a finite real number. A
+        missing key would otherwise be silently coerced to YIN, fabricating
+        state the agent never observed.
+        """
+        if not isinstance(sensor_data, dict):
+            raise TypeError(f"sensor_data must be a dict, got {type(sensor_data)}")
+        missing = [f for f in self._feature_mapping if f not in sensor_data]
+        if missing:
+            raise ValueError(f"sensor_data missing required keys: {missing}")
+        for feature in self._feature_mapping:
+            value = sensor_data[feature]
+            if not isinstance(value, (int, float)) or not math.isfinite(float(value)):
+                raise ValueError(
+                    f"sensor '{feature}' must be a finite number, got {value!r}"
+                )
 
     def feature_dim(self) -> int:
         return 6

@@ -6,14 +6,12 @@ from zwm.self_field.palace_graph import LuoshuGrid
 
 
 def time_expert(h: Hexagram, time_phase: float) -> float:
-    from zwm.jepa.circular_encoder import CircularEncoder
     encoder = _get_circular_encoder()
     return encoder.time_potential(h, time_phase)
 
 
 def space_expert(h: Hexagram, target_direction: int) -> float:
     from zwm.core.constants import LUOSHU_POSITIONS
-    from zwm.jepa.square_encoder import FixedWeightSquareGNN
 
     row, col = h.square_position()
     target_pos = LUOSHU_POSITIONS.get(target_direction, (1, 1))
