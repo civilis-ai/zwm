@@ -18,7 +18,60 @@
 
 import cv2, math, os, sys, time, numpy as np
 from pathlib import Path
+from PIL import Image, ImageDraw, ImageFont
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+
+# 中文字体路径 (Windows)
+_FONT_PATH = "C:/Windows/Fonts/msyh.ttc"  # 微软雅黑
+_FONT_SM = None
+_FONT_MD = None
+_FONT_LG = None
+
+
+def _get_font(size):
+    global _FONT_SM, _FONT_MD, _FONT_LG
+    try:
+        if size <= 14:
+            if _FONT_SM is None:
+                _FONT_SM = ImageFont.truetype(_FONT_PATH, 14)
+            return _FONT_SM
+        elif size <= 20:
+            if _FONT_MD is None:
+                _FONT_MD = ImageFont.truetype(_FONT_PATH, 18)
+            return _FONT_MD
+        else:
+            if _FONT_LG is None:
+                _FONT_LG = ImageFont.truetype(_FONT_PATH, 24)
+            return _FONT_LG
+    except Exception:
+        return ImageFont.load_default()
+
+
+def put_text_cn(canvas, text, pos, font_size=16, color=(0, 255, 0)):
+    """用 PIL 渲染中文到 OpenCV canvas."""
+    x, y = pos
+    font = _get_font(font_size)
+    # 测量文本
+    dummy = Image.new('RGB', (1, 1))
+    draw = ImageDraw.Draw(dummy)
+    bbox = draw.textbbox((0, 0), text, font=font)
+    tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
+
+    # 渲染到 PIL image
+    pil_img = Image.new('RGB', (tw + 4, th + 4), (0, 0, 0))
+    draw = ImageDraw.Draw(pil_img)
+    draw.text((2, 0), text, font=font, fill=color[::-1])  # RGB→BGR
+
+    # 转为 numpy 并叠加到 canvas
+    overlay = np.array(pil_img)[:, :, ::-1].copy()  # RGB→BGR
+    if overlay.shape[0] > 0 and overlay.shape[1] > 0:
+        h, w = overlay.shape[:2]
+        y2 = min(y + h, canvas.shape[0])
+        x2 = min(x + w, canvas.shape[1])
+        h2, w2 = y2 - y, x2 - x
+        if h2 > 0 and w2 > 0:
+            mask = (overlay[:h2, :w2] > 10).any(axis=2)
+            canvas[y:y2, x:x2][mask] = overlay[:h2, :w2][mask]
 
 
 class FieldVisualizer:
@@ -27,9 +80,9 @@ class FieldVisualizer:
     # 颜色映射: 阴(0)蓝 → 阳(1)红
     @staticmethod
     def yao_color(val):
-        r = int(50 + 200 * val)         # 红: 50→250
-        g = int(50 + 100 * (1 - abs(val - 0.5) * 2))  # 绿: 中间高
-        b = int(50 + 200 * (1 - val))   # 蓝: 250→50
+        r = int(50 + 200 * val)
+        g = int(50 + 100 * (1 - abs(val - 0.5) * 2))
+        b = int(50 + 200 * (1 - val))
         return (b, g, r)
 
     def __init__(self, width=1600, height=900):
@@ -107,8 +160,8 @@ class FieldVisualizer:
         x0, y0 = 790, 270
         pw, ph = 420, 220
         cv2.rectangle(canvas, (x0, y0), (x0 + pw, y0 + ph), (15, 15, 35), -1)
-        cv2.putText(canvas, f"Self: {ss.day_gan}·{ss.self_element} @Center",
-                   (x0 + 15, y0 + 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+        put_text_cn(canvas, f"Self: {ss.day_gan}·{ss.self_element} @ Center",
+                   (x0 + 15, y0 + 30), 18, (0, 255, 0))
 
         y = y0 + 55
         # 八方六亲
@@ -122,19 +175,18 @@ class FieldVisualizer:
             rel = ss.relation_to(pos)
             color = {'子孙': (0, 200, 0), '父母': (200, 200, 0), '妻财': (200, 150, 0),
                      '官鬼': (0, 0, 200), '兄弟': (0, 200, 200), '我': (0, 255, 0)}.get(rel, (150, 150, 150))
-            cv2.putText(canvas, f"{label}:{rel}", (px, py),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1)
+            put_text_cn(canvas, f"{label}:{rel}", (px, py), 14, color)
 
         # 天地层
         y += 85
-        cv2.putText(canvas, f"[{ss.relation_to(10)}] UP  |  MID  |  DOWN [{ss.relation_to(11)}]",
-                   (x0 + 10, y), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (150, 150, 255), 1)
+        put_text_cn(canvas, f"[{ss.relation_to(10)}] UP  |  MID  |  DOWN [{ss.relation_to(11)}]",
+                   (x0 + 10, y), 14, (150, 150, 255))
 
     def draw_multi_field(self, canvas, hex_field, tc):
         """多场共振视图 — 右下部 4个小面板."""
         x0, y0 = 790, 510
-        fields = [("Square", (0, 255, 0)), ("Circular", (255, 255, 0)),
-                  ("Ganzhi", (0, 255, 255)), ("Cosmic", (255, 0, 255))]
+        fields = [("Square Field", (0, 255, 0)), ("Circular Time", (255, 255, 0)),
+                  ("Ganzhi Cycle", (0, 255, 255)), ("Cosmic Scale", (255, 0, 255))]
         for i, (name, color) in enumerate(fields):
             fx = x0 + (i % 2) * 180
             fy = y0 + (i // 2) * 120
@@ -157,8 +209,7 @@ class FieldVisualizer:
         canvas = np.zeros((self.H, self.W, 3), dtype=np.uint8)
 
         # 标题
-        cv2.putText(canvas, "ZWM · 天地人三才世界模型 · Live", (20, 30),
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+        put_text_cn(canvas, "ZWM · 天地人三才世界模型 · Live", (20, 22), 24, (0, 255, 0))
 
         # ── 左半: 64卦场 (8×8) ──
         if hex_field is not None:
@@ -187,8 +238,7 @@ class FieldVisualizer:
         # 底部: LLM解说
         if engine_state and hasattr(engine_state, 'agent_reply') and engine_state.agent_reply:
             reply = engine_state.agent_reply[:120]
-            cv2.putText(canvas, f"ZWM: {reply}", (20, self.H - 20),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 0), 1)
+            put_text_cn(canvas, f"ZWM: {reply}", (20, self.H - 28), 16, (0, 255, 0))
 
         self._step += 1
         return canvas
