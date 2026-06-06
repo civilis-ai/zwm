@@ -32,46 +32,49 @@ class FieldVisualizer:
         b = int(50 + 200 * (1 - val))   # 蓝: 250→50
         return (b, g, r)
 
-    def __init__(self, width=1200, height=800):
+    def __init__(self, width=1600, height=900):
         self.W, self.H = width, height
-        self._history = []   # 历史帧缓存
+        self._history = []
         self._step = 0
 
     def draw_hexagram_cell(self, canvas, y, x, yao6, highlight=1.0):
         """在画布上绘制一个卦象单元 (6条爻线)."""
-        cx = 60 + x * 56
-        cy = 60 + y * 56
-        w, h = 48, 48
+        cell_w, cell_h = 80, 80
+        gap = 6
+        cx = 50 + x * (cell_w + gap)
+        cy = 60 + y * (cell_h + gap)
+        w, h = cell_w, cell_h
 
         # 背景 (高亮=预测误差大)
         alpha = min(1.0, highlight)
         bg_color = (int(50 * alpha), int(30 * alpha), int(80 * alpha))
         cv2.rectangle(canvas, (cx, cy), (cx + w, cy + h), bg_color, -1)
 
-        # 6条爻线 (上→下)
+        # 6条爻线 (上→下), 加粗
         for yi in range(6):
-            val = float(yao6[5 - yi])  # 上爻先画
+            val = float(yao6[5 - yi])
             color = self.yao_color(val)
-            lx, ly = cx + 6, cy + 8 + yi * 6
-            lw = w - 12
-            # 阳爻: 实线; 阴爻: 中间断开
+            lx, ly = cx + 10, cy + 12 + yi * 10
+            lw = w - 20
             if val > 0.5:
-                cv2.line(canvas, (lx, ly), (lx + lw, ly), color, 2)
+                cv2.line(canvas, (lx, ly), (lx + lw, ly), color, 3)
             else:
                 mid = lx + lw // 2
-                cv2.line(canvas, (lx, ly), (mid - 4, ly), color, 2)
-                cv2.line(canvas, (mid + 4, ly), (lx + lw, ly), color, 2)
+                gap = 6
+                cv2.line(canvas, (lx, ly), (mid - gap, ly), color, 3)
+                cv2.line(canvas, (mid + gap, ly), (lx + lw, ly), color, 3)
 
         # 边框
-        border = (80, 80, 80) if highlight < 1.5 else (0, 255, 255)
+        border = (60, 60, 60) if highlight < 1.5 else (0, 255, 255)
         cv2.rectangle(canvas, (cx, cy), (cx + w, cy + h), border, 1)
 
     def draw_jepa_panel(self, canvas, state):
         """JEPA 预测面板 — 右上角."""
-        x0, y0 = 580, 30
-        cv2.rectangle(canvas, (x0, y0), (x0 + 360, y0 + 200), (20, 20, 40), -1)
-        cv2.putText(canvas, "JEPA World Model", (x0 + 10, y0 + 25),
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+        x0, y0 = 790, 30
+        pw, ph = 420, 220
+        cv2.rectangle(canvas, (x0, y0), (x0 + pw, y0 + ph), (15, 15, 35), -1)
+        cv2.putText(canvas, "JEPA World Model", (x0 + 15, y0 + 30),
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
 
         y = y0 + 55
         last = state
@@ -100,11 +103,12 @@ class FieldVisualizer:
                    (x0 + 10, y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1)
 
     def draw_self_panel(self, canvas, ss):
-        """自我面板 — 左下角."""
-        x0, y0 = 580, 250
-        cv2.rectangle(canvas, (x0, y0), (x0 + 360, y0 + 200), (20, 20, 40), -1)
+        """自我面板 — 右中部."""
+        x0, y0 = 790, 270
+        pw, ph = 420, 220
+        cv2.rectangle(canvas, (x0, y0), (x0 + pw, y0 + ph), (15, 15, 35), -1)
         cv2.putText(canvas, f"Self: {ss.day_gan}·{ss.self_element} @Center",
-                   (x0 + 10, y0 + 25), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+                   (x0 + 15, y0 + 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
 
         y = y0 + 55
         # 八方六亲
@@ -127,8 +131,8 @@ class FieldVisualizer:
                    (x0 + 10, y), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (150, 150, 255), 1)
 
     def draw_multi_field(self, canvas, hex_field, tc):
-        """多场共振视图 — 右下角 4个小面板."""
-        x0, y0 = 580, 470
+        """多场共振视图 — 右下部 4个小面板."""
+        x0, y0 = 790, 510
         fields = [("Square", (0, 255, 0)), ("Circular", (255, 255, 0)),
                   ("Ganzhi", (0, 255, 255)), ("Cosmic", (255, 0, 255))]
         for i, (name, color) in enumerate(fields):
@@ -195,7 +199,7 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument("--record", action="store_true", help="录制视频文件")
     p.add_argument("--fullscreen", action="store_true", help="全屏")
-    p.add_argument("--steps", type=int, default=200, help="动画步数")
+    p.add_argument("--steps", type=int, default=500, help="动画步数")
     args = p.parse_args()
 
     print("╔══════════════════════════════════════════════════════╗")
@@ -210,13 +214,14 @@ def main():
     engine.activate()
     ss = engine.self_state
 
-    viz = FieldVisualizer(1200, 800)
+    W, H = 1600, 900
+    viz = FieldVisualizer(W, H)
     cv2.namedWindow("ZWM Live", cv2.WINDOW_NORMAL)
-    cv2.resizeWindow("ZWM Live", 1200, 800)
+    cv2.resizeWindow("ZWM Live", W, H)
 
     if args.record:
         fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-        out = cv2.VideoWriter('zwm_field_animation.mp4', fourcc, 10, (1200, 800))
+        out = cv2.VideoWriter('zwm_field_animation.mp4', fourcc, 10, (W, H))
         print("Recording: zwm_field_animation.mp4")
 
     hex_field = None
@@ -240,10 +245,18 @@ def main():
             except Exception:
                 pass
 
-        # 第20步时让 LLM 解说
-        if tick_count == 20 and engine._llm_router:
+        # 中途让 LLM 解说 (约在第 12 秒)
+        if tick_count == 30 and engine._llm_router:
             try:
                 reply = engine.ask("你现在看到了什么? 用1-2句话描述你眼前的世界状态。")
+                if engine_state:
+                    engine_state.agent_reply = reply
+            except Exception:
+                pass
+        # 结尾再来一句
+        if tick_count == 55 and engine._llm_router:
+            try:
+                reply = engine.ask("你探索了几个方向? 学到了什么? 用1-2句话总结。")
                 if engine_state:
                     engine_state.agent_reply = reply
             except Exception:
