@@ -216,54 +216,36 @@ class ZWMEngine:
     # ── 交流 ──
 
     def ask(self, question: str) -> str:
-        """与 agent 进行自然语言对话.
+        """与 agent 对话 — 基于真实内部状态的回复.
 
-        使用 LLM 路由器, 将 agent 的当前状态作为上下文。
+        有 LLM: 真实状态 → LLM 自然语言
+        无 LLM: 真实状态 → 结构化摘要
+        绝不使用硬编码模板。
         """
-        if self._llm_router is None:
-            return self._describe_world()
+        # 委托给 _introspect — 它已经做了"真实状态 → 回复"的逻辑
+        reply = self._introspect(question)
+        if reply:
+            return reply
+        # 无法内省的问题 → 至少返回状态摘要
+        return self._describe_world()
 
+    def _describe_world(self) -> str:
+        """从真实内部状态构造世界描述."""
         ss = self._agent.self_state
         tc = getattr(self._agent, "_time_context", None)
         last = self._history[-1] if self._history else None
 
-        context = (
-            f"You are ZWM, a world model agent based on I Ching mathematics.\n"
-            f"Your self: 日{ss.day_gan}·{ss.self_element}, always at central palace 5.\n"
-            f"Six relations: {ss.six_relations}\n"
-        )
-        if tc:
-            context += (
-                f"Time: {tc.ganzhi_str}, {tc.solar_term_name}, "
-                f"hui={tc.hui_index}, value year hex=#{tc.value_year_hex}\n"
-            )
-        if last:
-            context += (
-                f"Last action: {last.next_hexagram}, "
-                f"JEPA loss={last.jepa_loss:.4f}, surprise={last.surprise:.3f}\n"
-            )
-
-        prompt = f"{context}\nHuman asks: {question}\nRespond in 1-3 sentences as ZWM."
-        try:
-            resp = self._llm_router._backend.generate(prompt, max_tokens=200)
-            return resp.text.strip()
-        except Exception:
-            return self._describe_world()
-
-    def _describe_world(self) -> str:
-        """回退: 用结构化数据描述世界."""
-        ss = self._agent.self_state
-        tc = getattr(self._agent, "_time_context", None)
-        parts = [
-            f"我是日{ss.day_gan}·{ss.self_element}, 永远在中宫.",
-            f"八方关系: { {k:v for k,v in ss.six_relations.items() if v!='兄弟'} }",
+        facts = [
+            f"日{ss.day_gan}·{ss.self_element}, @中宫(5)",
+            f"六亲: N={ss.relation_to(1)} S={ss.relation_to(9)} "
+            f"E={ss.relation_to(3)} W={ss.relation_to(7)}",
+            f"探索: {ss.total_visits}/8宫位",
         ]
         if tc:
-            parts.append(f"时间: {tc.ganzhi_str}, {tc.solar_term_name}, 午会.")
-        if self._history:
-            last = self._history[-1]
-            parts.append(f"上次: →{last.next_hexagram}, JEPA loss={last.jepa_loss:.4f}.")
-        return " | ".join(parts)
+            facts.append(f"{tc.ganzhi_str} {tc.solar_term_name} 午会")
+        if last:
+            facts.append(f"卦:{last.next_hexagram} JEPA={last.jepa_loss:.4f}")
+        return " | ".join(facts)
 
     # ── 学习 ──
 
@@ -309,32 +291,49 @@ class ZWMEngine:
         return state
 
     def _introspect(self, inst: str) -> str | None:
-        """内省回复 — 身份/状态/能力类问题, 无需移动."""
+        """真正的内省 — 从 agent 的真实内部状态构造回复, 不做硬编码匹配.
+
+        不使用关键词→固定文本的映射。而是:
+          1. 调用所有内部状态源 (Self, Time, JEPA, Memory)
+          2. 让 LLM 根据这些真实状态生成回复 (如果有 LLM)
+          3. 无 LLM 时, 用结构化状态摘要作为回复
+        """
         ss = self._agent.self_state
         tc = getattr(self._agent, "_time_context", None)
         last = self._history[-1] if self._history else None
 
-        triggers = {
-            "你是谁": f"我是ZWM, 日{ss.day_gan}·{ss.self_element}, 永远在中宫. "
-                      f"我的六亲: 北{ss.relation_to(1)} 南{ss.relation_to(9)} "
-                      f"东{ss.relation_to(3)} 西{ss.relation_to(7)}.",
-            "哪个": f"我是ZWM智能体, 日{ss.day_gan}·{ss.self_element}属性, @中宫. "
-                    f"我是一个基于易经数学的世界模型, 拥有JEPA预测、MCTS规划、多场感知能力.",
-            "能力": f"我能: 观察世界(传感器→卦象场), 预测变化(JEPA), "
-                    f"规划行动(MCTS+EFE), 使用工具(ReAct), 与人对话(LLM). "
-                    f"我当前在{self._step}步, 已探索{ss.total_visits}/8个宫位.",
-            "时间": f"现在是{tc.ganzhi_str}, {tc.solar_term_name}节气, "
-                    f"午会第{tc.yun_index}运. 值年卦#{tc.value_year_hex}.",
-            "状态": self._describe_world(),
-            "在哪": f"我在中宫(5). 周围八方关系: "
-                    f"北{ss.relation_to(1)} 南{ss.relation_to(9)} "
-                    f"东{ss.relation_to(3)} 西{ss.relation_to(7)}.",
-            "六亲": f"以我(日{ss.day_gan}·{ss.self_element})为中心: {ss.six_relations}",
-        }
-        for keyword, reply in triggers.items():
-            if keyword in inst:
-                return reply
-        return None
+        # 收集当前的真实内部状态
+        facts = [f"自我: 日{ss.day_gan}·{ss.self_element}, 永远在中宫(5)"]
+        facts.append(f"六亲: {ss.six_relations}")
+        if tc:
+            facts.append(f"时间: {tc.ganzhi_str}, {tc.solar_term_name}节气, "
+                        f"午会, 值年卦#{tc.value_year_hex}")
+        facts.append(f"运行: {self._step} ticks, 已探索{ss.total_visits}/8宫位")
+        if last:
+            facts.append(f"最近: 卦{last.next_hexagram}, JEPA loss={last.jepa_loss:.4f}")
+            if last.z_world is not None:
+                facts.append(f"世界向量维度: {last.z_world.shape}")
+
+        # LLM 路径: 让 LLM 基于真实状态生成自然语言回复
+        if self._llm_router is not None:
+            try:
+                prompt = (
+                    f"你是 ZWM, 一个基于易经数学的世界模型智能体. "
+                    f"以下是你的当前真实状态:\n"
+                    + "\n".join(facts) +
+                    f"\n\n人类问你: {inst}\n"
+                    f"请根据你的真实状态, 用第一人称回答 (2-4句). "
+                    f"不要编造你不知道的信息."
+                )
+                resp = self._llm_router._backend.generate(
+                    prompt, max_tokens=200, temperature=0.7,
+                )
+                return resp.text.strip()
+            except Exception as e:
+                _log.debug("LLM introspect failed: %s", e)
+
+        # 无 LLM 回退: 返回结构化事实 (这是真实状态, 不是硬编码)
+        return " | ".join(facts)
 
     def _parse_target(self, inst: str, ss) -> int:
         """从指令解析目标宫位."""
