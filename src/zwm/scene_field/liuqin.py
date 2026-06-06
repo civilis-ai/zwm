@@ -4,7 +4,7 @@ from zwm.core.constants import (
     ELEMENT_CONTROL,
     ELEMENT_GENERATION,
     ELEMENT_REVERSE_CONTROL,
-    GAN_ELEMENT,
+    TIAN_GAN_ELEMENTS,
     PALACE_ELEMENT,
     _HEXAGRAM_TO_PALACE,
 )
@@ -14,12 +14,12 @@ from zwm.self_field.palace_graph import LuoshuGrid
 
 def self_element_from_day_gan(day_gan: str) -> str:
     """从日干获取五行'我'元素."""
-    if day_gan not in GAN_ELEMENT:
+    if day_gan not in TIAN_GAN_ELEMENTS:
         raise ValueError(
             f"Unknown day stem: '{day_gan}'. Must be one of: "
-            f"{', '.join(GAN_ELEMENT.keys())}"
+            f"{', '.join(TIAN_GAN_ELEMENTS.keys())}"
         )
-    return GAN_ELEMENT[day_gan]
+    return TIAN_GAN_ELEMENTS[day_gan]
 
 
 def hexagram_palace_index(h: Hexagram) -> int:
@@ -66,9 +66,10 @@ def determine_six_relations(
     for pos in range(1, 10):
         if pos == grid.self_position:
             continue
-        # 卦宫五行 determined by palace trigram index
-        palace_trigram_idx = pos % 8
-        palace_elem = PALACE_ELEMENT.get(palace_trigram_idx, "土")
+        # 九宫→五行 (文王后天八卦)
+        _PALACE_ELEM = {1: "水", 2: "土", 3: "木", 4: "木", 5: "土",
+                        6: "金", 7: "金", 8: "土", 9: "火"}
+        palace_elem = _PALACE_ELEM.get(pos, "土")
 
         if palace_elem == self_elem:
             relations[pos] = "兄弟"

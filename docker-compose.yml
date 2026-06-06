@@ -1,0 +1,67 @@
+version: "3.9"
+
+# P3-2 (audit) — ZWM 容器化部署
+#
+# 使用:
+#   docker compose up -d              # 启动 API 服务
+#   docker compose run --rm zwm-cli info  # 运行 CLI 工具
+#   docker compose run --rm zwm-test     # 运行测试套件
+
+services:
+  # ---- FastAPI 服务 ----
+  zwm-api:
+    build:
+      context: .
+      target: production
+    image: zwm:latest
+    container_name: zwm-api
+    ports:
+      - "8000:8000"
+    volumes:
+      - zwm_data:/data
+    environment:
+      - ZWM_DB_PATH=/data/zwm.db
+      - ZWM_LOG_DIR=/data/runs
+      - ZWM_CHECKPOINT_PATH=/data/checkpoint.json
+      - ZWM_MCTS_ITERATIONS=200
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+
+  # ---- CLI 工具 (按需运行) ----
+  zwm-cli:
+    build:
+      context: .
+      target: source
+    image: zwm:latest
+    container_name: zwm-cli
+    profiles: ["cli"]
+    volumes:
+      - zwm_data:/data
+    environment:
+      - ZWM_DB_PATH=/data/zwm.db
+      - ZWM_LOG_DIR=/data/runs
+    command: ["python", "-m", "zwm.cli", "info"]
+
+  # ---- 测试套件 (CI 用) ----
+  zwm-test:
+    build:
+      context: .
+      target: source
+    image: zwm:latest
+    container_name: zwm-test
+    profiles: ["test"]
+    volumes:
+      - zwm_data:/data
+    environment:
+      - ZWM_DB_PATH=/data/zwm.db
+      - ZWM_LOG_DIR=/data/runs
+    command: ["python", "-m", "pytest", "tests/", "--no-cov", "-q"]
+
+volumes:
+  zwm_data:
+    driver: local

@@ -5,7 +5,6 @@ import numpy as np
 from zwm.core.constants import (
     ELEMENT_CONTROL,
     ELEMENT_GENERATION,
-    LUOSHU_GENERATION_PAIRS,
     TRIGRAM_ELEMENTS,
 )
 from zwm.core.hexagram import Hexagram

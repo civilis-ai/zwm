@@ -1,0 +1,113 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "zwm.fullname" . }}
+  labels: {{- include "zwm.labels" . | nindent 4 }}
+spec:
+  {{- if not .Values.autoscaling.enabled }}
+  replicas: {{ .Values.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels: {{- include "zwm.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels: {{- include "zwm.selectorLabels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "zwm.serviceAccountName" . }}
+      securityContext: {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- if .Values.persistence.enabled }}
+      volumes:
+        - name: data
+          {{- if .Values.persistence.hostPath }}
+          hostPath:
+            path: {{ .Values.persistence.hostPath }}
+          {{- else }}
+          persistentVolumeClaim:
+            claimName: {{ include "zwm.fullname" . }}-data
+          {{- end }}
+      {{- end }}
+      containers:
+        - name: zwm
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["zwm"]
+          args: ["serve", "--host", "0.0.0.0", "--port", "8000"]
+          ports:
+            - name: rest
+              containerPort: {{ .Values.service.rest.targetPort }}
+              protocol: TCP
+            - name: grpc
+              containerPort: {{ .Values.service.grpc.targetPort }}
+              protocol: TCP
+            - name: mcp-http
+              containerPort: {{ .Values.service.mcp.targetPort }}
+              protocol: TCP
+          env:
+            - name: ZWM_DB_PATH
+              value: {{ .Values.zwm.dbPath | quote }}
+            - name: ZWM_MCTS_ITERATIONS
+              value: {{ .Values.zwm.mctsIterations | quote }}
+            - name: ANTHROPIC_API_KEY
+              value: {{ .Values.env.ANTHROPIC_API_KEY | quote }}
+            - name: OPENAI_API_KEY
+              value: {{ .Values.env.OPENAI_API_KEY | quote }}
+            - name: DEEPSEEK_API_KEY
+              value: {{ .Values.env.DEEPSEEK_API_KEY | quote }}
+            {{- if .Values.env.ZWM_OTLP_ENDPOINT }}
+            - name: ZWM_OTLP_ENDPOINT
+              value: {{ .Values.env.ZWM_OTLP_ENDPOINT | quote }}
+            {{- end }}
+            {{- if .Values.env.OTEL_EXPORTER_OTLP_ENDPOINT }}
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: {{ .Values.env.OTEL_EXPORTER_OTLP_ENDPOINT | quote }}
+            {{- end }}
+          {{- with .Values.envFromSecrets }}
+          envFrom: {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- if .Values.persistence.enabled }}
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          {{- end }}
+          {{- if .Values.gpu.enabled }}
+          resources:
+            requests:
+              memory: {{ .Values.resources.requests.memory }}
+              cpu: {{ .Values.resources.requests.cpu }}
+              {{ .Values.gpu.type }}: {{ .Values.gpu.count }}
+            limits:
+              memory: {{ .Values.resources.limits.memory }}
+              cpu: {{ .Values.resources.limits.cpu }}
+              {{ .Values.gpu.type }}: {{ .Values.gpu.count }}
+          {{- else }}
+          resources: {{- toYaml .Values.resources | nindent 12 }}
+          {{- end }}
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: rest
+            initialDelaySeconds: 30
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: rest
+            initialDelaySeconds: 10
+            periodSeconds: 10
+        {{- with .Values.sidecars }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations: {{- toYaml . | nindent 8 }}
+      {{- end }}

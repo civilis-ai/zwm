@@ -1,0 +1,45 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "zwm.fullname" . }}-rest
+  labels: {{- include "zwm.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.service.rest.type }}
+  ports:
+    - port: {{ .Values.service.rest.port }}
+      targetPort: {{ .Values.service.rest.targetPort }}
+      protocol: TCP
+      name: rest
+  selector: {{- include "zwm.selectorLabels" . | nindent 4 }}
+---
+{{- if .Values.service.grpc.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "zwm.fullname" . }}-grpc
+  labels: {{- include "zwm.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.service.grpc.type }}
+  ports:
+    - port: {{ .Values.service.grpc.port }}
+      targetPort: {{ .Values.service.grpc.targetPort }}
+      protocol: TCP
+      name: grpc
+  selector: {{- include "zwm.selectorLabels" . | nindent 4 }}
+{{- end }}
+---
+{{- if .Values.service.mcp.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "zwm.fullname" . }}-mcp
+  labels: {{- include "zwm.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.service.mcp.type }}
+  ports:
+    - port: {{ .Values.service.mcp.port }}
+      targetPort: {{ .Values.service.mcp.targetPort }}
+      protocol: TCP
+      name: mcp-http
+  selector: {{- include "zwm.selectorLabels" . | nindent 4 }}
+{{- end }}

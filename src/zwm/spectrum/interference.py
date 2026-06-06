@@ -3,7 +3,6 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
-from zwm.spectrum.complex_phase import HexagramPhaseVector
 from zwm.spectrum.frequency import FrequencySpectrum
 
 

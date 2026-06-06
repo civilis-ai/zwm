@@ -6,10 +6,7 @@ from zwm.core.constants import (
     LUOSHU_CONFLICT_PAIRS,
     LUOSHU_DIRECTION_NAMES,
     LUOSHU_GENERATION_PAIRS,
-    LUOSHU_NUMBERS,
-    LUOSHU_POSITIONS,
     PALACE_POST_HEAVEN_BAGUA,
-    TRIGRAM_ELEMENTS,
 )
 
 
@@ -39,7 +36,7 @@ class LuoshuGrid:
         for pos in range(1, 10):
             self.nodes[pos] = PalaceNode(
                 position=pos,
-                luoshu_number=LUOSHU_NUMBERS[pos],
+                luoshu_number=pos,
                 bagua=PALACE_POST_HEAVEN_BAGUA.get(pos, "中"),
                 direction=LUOSHU_DIRECTION_NAMES.get(pos, "中"),
             )

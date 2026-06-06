@@ -1,6 +1,6 @@
 import math
 
-from zwm.core.hexagram import all_hexagrams, hexagram_from_bits, hexagram_from_name
+from zwm.core.hexagram import hexagram_from_bits, hexagram_from_name
 from zwm.self_field.palace_graph import LuoshuGrid
 from zwm.scene_field.five_hexagrams import FiveHexagramChain
 from zwm.scene_field.wuxing import element_force, hexagram_element_profile
@@ -10,7 +10,6 @@ from zwm.scene_field.unified_field import UnifiedField
 from zwm.planner.mutations import (
     all_mutations,
     all_successors,
-    apply_mutation,
     classify_mutation,
     mutation_path,
     single_yao_mutations,
@@ -92,8 +91,9 @@ class TestCalendar:
 
     def test_multi_scale_calendar(self):
         cal = MultiScaleCalendar()
-        layers = cal.time_layers(2026)
-        assert len(layers) == 3
+        layers = cal.time_layers(2026, 6, 15, 12)
+        # 年/月/日/时 — 干支四柱完整时层
+        assert len(layers) == 4
         assert all(0 <= v <= 2 * math.pi for v in layers.values())
 
 
@@ -184,14 +184,14 @@ class TestMoE:
     def test_sparse_moe(self):
         qian = hexagram_from_name("乾为天")
         grid = LuoshuGrid()
-        moe = SparseMoE(top_k=3)
+        moe = SparseMoE(top_k=3, use_fine_grained=False)
         score = moe.evaluate(qian, grid, time_phase=0.0, target_palace=1)
         assert 0.0 <= score <= 1.0
 
     def test_active_experts(self):
         qian = hexagram_from_name("乾为天")
         grid = LuoshuGrid()
-        moe = SparseMoE(top_k=3)
+        moe = SparseMoE(top_k=3, use_fine_grained=False)
         active = moe.active_experts(qian, grid, time_phase=0.0)
         assert 1 <= len(active) <= 6
 
@@ -287,7 +287,7 @@ class TestEndToEnd:
         qian = hexagram_from_name("乾为天")
         grid = LuoshuGrid()
         planner = TrinityPlanner()
-        moe = SparseMoE(top_k=3)
+        moe = SparseMoE(top_k=3, use_fine_grained=False)
         learner = OnlineLearner()
         calendar = MultiScaleCalendar()
 
@@ -435,7 +435,6 @@ class TestDayGanLiuqin:
             hexagram_palace_index,
             hexagram_palace_element,
         )
-        from zwm.core.hexagram import hexagram_from_bits
 
         # 乾为天(63) → 乾宫(7) → 金
         qian = hexagram_from_bits(63)

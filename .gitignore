@@ -52,3 +52,9 @@ docs/*_enhanced.png
 logs/
 *.db
 *.sqlite
+*.npz
+*.json
+!pyproject.toml
+!.gitignore
+runs/
+/baseline_metrics.json

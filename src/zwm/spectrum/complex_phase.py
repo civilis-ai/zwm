@@ -8,18 +8,6 @@ from dataclasses import dataclass
 class ComplexPhase:
     value: complex
 
-    @classmethod
-    def from_yin_yang(cls, is_yang: bool) -> ComplexPhase:
-        return cls(1 + 0j if is_yang else -1 + 0j)
-
-    @classmethod
-    def from_phase(cls, phi: float) -> ComplexPhase:
-        return cls(math.cos(phi) + 1j * math.sin(phi))
-
-    @classmethod
-    def from_index(cls, idx: int) -> ComplexPhase:
-        return cls(1 + 0j if idx == 0 else -1 + 0j)
-
     @property
     def is_yang(self) -> bool:
         return abs(self.value.real - 1.0) < 1e-10
@@ -28,20 +16,7 @@ class ComplexPhase:
     def phase(self) -> float:
         return 0.0 if self.is_yang else math.pi
 
-    @property
-    def binary(self) -> int:
-        return 1 if self.is_yang else 0
-
     def flip(self) -> ComplexPhase:
-        return ComplexPhase(-self.value)
-
-    def __mul__(self, other: ComplexPhase) -> ComplexPhase:
-        return ComplexPhase(self.value * other.value)
-
-    def __add__(self, other: ComplexPhase) -> ComplexPhase:
-        return ComplexPhase(self.value + other.value)
-
-    def __neg__(self) -> ComplexPhase:
         return ComplexPhase(-self.value)
 
     def __repr__(self) -> str:
@@ -62,12 +37,24 @@ class HexagramPhaseVector:
 
     @classmethod
     def from_hexagram(cls, hexagram) -> HexagramPhaseVector:
-        from zwm.core.hexagram import Hexagram
-        if isinstance(hexagram, Hexagram):
+        # P1-arch: prefer ``to_phase_vector()`` (defined on the Hexagram
+        # data model itself) over reaching into ``hexagram.lines``.  This
+        # inverts the spectrum → core dependency: the data model now
+        # provides its phase representation, and spectrum operates on
+        # primitive complex tuples without importing Hexagram.
+        if hasattr(hexagram, "to_phase_vector"):
+            phases = hexagram.to_phase_vector()
+            return cls(tuple(ComplexPhase(c) for c in phases))
+        # Backward-compat fallback: if the object has a ``lines`` attr,
+        # read per-line complex phases directly.
+        if hasattr(hexagram, "lines"):
             return cls(tuple(
                 ComplexPhase(line.complex_phase) for line in hexagram.lines
             ))
-        raise TypeError(f"Expected Hexagram, got {type(hexagram)}")
+        raise TypeError(
+            f"Expected a hexagram-like object with to_phase_vector() or "
+            f"lines attribute, got {type(hexagram)}"
+        )
 
     @classmethod
     def from_bits(cls, bits: int) -> HexagramPhaseVector:

@@ -68,10 +68,12 @@ def score_surface(
 
     if h_target is not None:
         pv_t = HexagramPhaseVector.from_hexagram(h_target)
-        harmony = 0.0
-        for k in range(6):
-            harmony += math.cos(pv.phases[k].phase - pv_t.phases[k].phase)
-        harmony /= 6.0
+        # P0-dead-output: use the existing cosine_similarity method
+        # (which applies weighted harmonic comparison with the
+        # hexagram's 6-line complex phase vector) instead of the
+        # bare per-harmonic cosine loop.  This method was previously
+        # defined but never called outside its own unit tests.
+        harmony = pv.cosine_similarity(pv_t)
         score = 0.6 * score + 0.4 * max(0.0, harmony)
 
     return float(score)

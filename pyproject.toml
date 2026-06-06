@@ -33,6 +33,20 @@ dev = [
     "pytest>=8.0",
     "pytest-cov>=4.1",
 ]
+api = [
+    "fastapi>=0.109",
+    "uvicorn[standard]>=0.25",
+    "pydantic>=2.5",
+]
+
+# P1-4 (audit): Console scripts — the README and api/app.py both
+# reference ``zwm-serve`` but it was never declared, leaving users
+# with a runtime ``command not found`` error.  ``zwm`` is the new
+# top-level CLI for inspecting state, running ticks, and managing
+# sessions without writing Python.
+[project.scripts]
+zwm-serve = "zwm.cli:main_serve"
+zwm = "zwm.cli:main_cli"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
@@ -43,3 +57,8 @@ where = ["src"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = ["-v", "--cov=zwm", "--cov-report=term-missing"]
+markers = [
+    "fsdp2_multigpu: opt-in multi-GPU FSDP2 integration tests (run under torchrun)",
+    "slow: tests that take more than 1s",
+    "gpu: tests that require a CUDA device",
+]

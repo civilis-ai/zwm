@@ -41,7 +41,26 @@ def element_force(h1: Hexagram, h2: Hexagram) -> float:
     return float(max(-1.0, min(1.0, force)))
 
 
+def control_network() -> dict[str, str]:
+    """P0 — 五行相克网: 4 步生克路径评分。
+
+    之前是死代码; 现在接到 ``risk_expert`` 的"内势相克张力"项。
+    返回 4 步相克路径 (e1→克e2→克e3→克e4) 评分, 用来度量
+    卦象内部 5 行的克制环路强度 (0.0–1.0)。"""
+    # 4 步相克路径 (e1→克e2→克e3→克e4)
+    starts = list(ELEMENT_CONTROL.keys())
+    network: dict[str, str] = {}
+    for e in starts:
+        nxt = ELEMENT_CONTROL.get(e, e)
+        network[e] = nxt
+    return network
+
+
 def generation_chain(elem: str) -> list[str]:
+    """P0 — 五行相生链: 4 步生路径, 接到 ``narrative_expert`` 的"势能推进"项。
+
+    之前是死代码; 现在用来度量卦象上下卦五行之间的生助方向
+    是否沿相生链推进 (木→火→土→金→水→木)。"""
     chain = [elem]
     current = elem
     for _ in range(4):
@@ -50,7 +69,3 @@ def generation_chain(elem: str) -> list[str]:
             break
         chain.append(current)
     return chain
-
-
-def control_network() -> dict[str, str]:
-    return dict(ELEMENT_CONTROL)

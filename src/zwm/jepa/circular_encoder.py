@@ -11,7 +11,6 @@ class CircularEncoder:
     def __init__(self) -> None:
         self._phase_cache: dict[int, float] = {}
         for h in range(64):
-            from zwm.core.hexagram import hexagram_from_bits
             from zwm.spectrum.complex_phase import HexagramPhaseVector
             pv = HexagramPhaseVector.from_bits(h)
             spec_sum = pv.weighted_sum()

@@ -1,3 +1,83 @@
+# ======================================================================
+# Fail-loud guard — gate the gradual migration from ``except: pass``
+# to strict mode.  Set ``ZWM_STRICT=1`` in CI / test to surface bugs
+# that would otherwise be silently swallowed.
+# ======================================================================
+from __future__ import annotations
+
+import os as _os
+
+
+def fail_loud(context: str = "") -> bool:
+    """Return True → caller must re-raise; False → log-and-continue.
+
+    The 2026-06 audit found 55 ``except Exception: pass`` sites.
+    This helper gradually gates them behind ``ZWM_STRICT`` so we
+    stop hiding dimension mismatches and type errors in the OODA loop.
+
+    Usage::
+
+        try:
+            ...
+        except Exception as exc:
+            if fail_loud(f"telemetry flush: {exc}"):
+                raise
+            _log.debug("telemetry flush failed: %s", exc)
+    """
+    return _os.environ.get("ZWM_STRICT") in ("1", "true", "yes")
+
+
+# ======================================================================
+# Architecture dimension constants — single source of truth
+# ======================================================================
+# World vector: 64 (square GNN) + 13 (circular phase) + 29 (unified field)
+Z_WORLD_DIM: int = 106
+
+# Size presets — scale the world-model Width / Depth / Latent to match
+# the available hardware.  ``test`` stays tiny so CI is fast; ``base``
+# is the default for GPU development; ``large`` is for production
+# training and justifies the LoRA / 4-bit / FSDP2 subsystems.
+
+SIZE_PRESETS = {
+    "test": {
+        "hidden_dim": 192,
+        "latent_dim": 64,
+        "action_embed_dim": 32,
+        "mcts_iterations": 60,
+        "replay_capacity": 256,
+        "batch_size": 16,
+        "n_particles": 4,
+    },
+    "base": {
+        "hidden_dim": 256,
+        "latent_dim": 128,
+        "action_embed_dim": 64,
+        "mcts_iterations": 200,
+        "replay_capacity": 512,
+        "batch_size": 32,
+        "n_particles": 16,
+    },
+    "large": {
+        "hidden_dim": 512,
+        "latent_dim": 256,
+        "action_embed_dim": 128,
+        "mcts_iterations": 400,
+        "replay_capacity": 1024,
+        "batch_size": 64,
+        "n_particles": 32,
+    },
+}
+
+# Default: test preset values (safe for CI; override via ZWM_SIZE_PRESET).
+_default = SIZE_PRESETS[_os.environ.get("ZWM_SIZE_PRESET", "test")]
+LATENT_DIM: int = _default["latent_dim"]
+HIDDEN_DIM: int = _default["hidden_dim"]
+ACTION_EMBED_DIM: int = _default["action_embed_dim"]
+# Predictor input dim when action conditioning is enabled
+PREDICTOR_INPUT_DIM: int = LATENT_DIM + ACTION_EMBED_DIM
+# Trainable VSA codebook output dim
+VSA_DIM: int = 256
+
 SOLAR_TERMS: tuple[str, ...] = (
     "冬至", "小寒", "大寒",
     "立春", "雨水", "惊蛰",
@@ -9,19 +89,10 @@ SOLAR_TERMS: tuple[str, ...] = (
     "立冬", "小雪", "大雪",
 )
 
-LUOSHU_NUMBERS: dict[int, int] = {
-    1: 1, 2: 2, 3: 3, 4: 4,
-    5: 5, 6: 6, 7: 7, 8: 8, 9: 9,
-}
-
 LUOSHU_POSITIONS: dict[int, tuple[int, int]] = {
     4: (0, 0), 9: (0, 1), 2: (0, 2),
     3: (1, 0), 5: (1, 1), 7: (1, 2),
     8: (2, 0), 1: (2, 1), 6: (2, 2),
-}
-
-POSITION_TO_LUOSHU: dict[tuple[int, int], int] = {
-    v: k for k, v in LUOSHU_POSITIONS.items()
 }
 
 LUOSHU_GENERATION_PAIRS: set[tuple[int, int]] = {
@@ -49,8 +120,6 @@ PALACE_POST_HEAVEN_BAGUA: dict[int, str] = {
     5: "中", 6: "乾", 7: "兑", 8: "艮", 9: "离",
 }
 
-FIVE_ELEMENTS: tuple[str, ...] = ("金", "木", "水", "火", "土")
-
 ELEMENT_GENERATION: dict[str, str] = {
     "木": "火", "火": "土", "土": "金", "金": "水", "水": "木",
 }
@@ -71,20 +140,27 @@ TRIGRAM_ELEMENTS: dict[int, str] = {
     4: "土", 0: "土",
 }
 
-YAO_WEIGHTS: tuple[float, ...] = (1.0, 0.9, 0.7, 0.5, 0.3, 0.2)
-
-TIAN_GAN: tuple[str, ...] = (
+_TIAN_GAN: tuple[str, ...] = (
     "甲", "乙", "丙", "丁", "戊",
     "己", "庚", "辛", "壬", "癸",
 )
 
-DI_ZHI: tuple[str, ...] = (
+# 天干 → 五行映射 (甲乙→木, 丙丁→火, 戊己→土, 庚辛→金, 壬癸→水)
+TIAN_GAN_ELEMENTS: dict[str, str] = {
+    "甲": "木", "乙": "木",
+    "丙": "火", "丁": "火",
+    "戊": "土", "己": "土",
+    "庚": "金", "辛": "金",
+    "壬": "水", "癸": "水",
+}
+
+_DI_ZHI: tuple[str, ...] = (
     "子", "丑", "寅", "卯", "辰", "巳",
     "午", "未", "申", "酉", "戌", "亥",
 )
 
 GANZHI_60: tuple[str, ...] = tuple(
-    f"{TIAN_GAN[i % 10]}{DI_ZHI[i % 12]}"
+    f"{_TIAN_GAN[i % 10]}{_DI_ZHI[i % 12]}"
     for i in range(60)
 )
 
@@ -118,11 +194,6 @@ CODON_TABLE: dict[int, str] = {
     60: "GGU", 61: "GGC", 62: "GGA", 63: "GGG",
 }
 
-MUTATION_TYPE_NAMES: dict[int, str] = {
-    1: "初爻变", 2: "二爻变", 4: "三爻变",
-    8: "四爻变", 16: "五爻变", 32: "上爻变",
-}
-
 # 八宫 (8 Palace) mapping: normal_order → palace_trigram_index
 # Each palace's pure trigram determines its element.
 # Palace trigram indices match Trigram.index convention.
@@ -136,16 +207,6 @@ _HEXAGRAM_TO_PALACE: tuple[int, ...] = (
     7, 6, 5, 4, 4, 6, 6, 6,   # 48-55: 乾 巽 离 艮 艮 巽 巽 巽
     7, 6, 5, 4, 7, 5, 7, 7,   # 56-63: 乾 巽 离 艮 乾 离 乾 乾
 )
-
-# 日干 → 五行: Day Heavenly Stem to Element
-# Based on the 十天干 (10 Heavenly Stems) elemental assignments
-GAN_ELEMENT: dict[str, str] = {
-    "甲": "木", "乙": "木",
-    "丙": "火", "丁": "火",
-    "戊": "土", "己": "土",
-    "庚": "金", "辛": "金",
-    "壬": "水", "癸": "水",
-}
 
 # 卦宫五行: Palace trigram index → element
 PALACE_ELEMENT: dict[int, str] = {

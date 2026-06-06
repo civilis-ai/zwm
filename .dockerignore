@@ -1,0 +1,43 @@
+# Git
+.git/
+.gitignore
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Tests & coverage
+.pytest_cache/
+.coverage
+htmlcov/
+.coverage.*
+
+# Data (mounted as volumes)
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.npz
+runs/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docs
+*.md

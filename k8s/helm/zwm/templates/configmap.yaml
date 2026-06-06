@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "zwm.fullname" . }}-config
+  labels: {{- include "zwm.labels" . | nindent 4 }}
+data:
+  ZWM_DB_PATH: {{ .Values.zwm.dbPath | quote }}
+  ZWM_MCTS_ITERATIONS: {{ .Values.zwm.mctsIterations | quote }}
+  ZWM_N_PARTICLES: {{ .Values.zwm.nParticles | quote }}
+  ZWM_USE_DIFFUSION: {{ .Values.zwm.useDiffusion | quote }}
+  ZWM_LLM_PROVIDER: {{ .Values.zwm.llmProvider | quote }}

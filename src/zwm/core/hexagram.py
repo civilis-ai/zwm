@@ -47,10 +47,6 @@ class Hexagram:
         60: "天山遁", 61: "天火同人", 62: "天风姤", 63: "乾为天",
     }
 
-    _NAJIA_ELEMENTS: ClassVar[dict[int, tuple[str, str, str, str, str, str]]] = {
-        0: ("土", "土", "木", "木", "水", "金"),
-    }
-
     def __init__(
         self,
         line0: YaoLine,
@@ -67,36 +63,6 @@ class Hexagram:
 
     def __delattr__(self, name):
         raise AttributeError("Hexagram is immutable")
-
-    @property
-    def chu(self) -> YaoLine:
-        """初爻 (bottom line, bit0)."""
-        return self._lines[0]
-
-    @property
-    def er(self) -> YaoLine:
-        """二爻 (bit1)."""
-        return self._lines[1]
-
-    @property
-    def san(self) -> YaoLine:
-        """三爻 (bit2)."""
-        return self._lines[2]
-
-    @property
-    def si(self) -> YaoLine:
-        """四爻 (bit3)."""
-        return self._lines[3]
-
-    @property
-    def wu(self) -> YaoLine:
-        """五爻 (bit4)."""
-        return self._lines[4]
-
-    @property
-    def shang(self) -> YaoLine:
-        """上爻 (top line, bit5=MSB)."""
-        return self._lines[5]
 
     @property
     def lines(self) -> tuple[YaoLine, YaoLine, YaoLine, YaoLine, YaoLine, YaoLine]:
@@ -159,6 +125,18 @@ class Hexagram:
     def complex_phase_diffs(self) -> tuple[complex, complex, complex, complex, complex, complex]:
         return tuple(line.complex_phase for line in self._lines)
 
+    def to_phase_vector(self) -> "tuple[complex, complex, complex, complex, complex, complex]":
+        """Return the 6-line complex phase vector for spectrum analysis.
+
+        P1-arch: this method inverts the spectrum → core dependency.
+        Previously ``HexagramPhaseVector.from_hexagram(h)`` in
+        ``spectrum/complex_phase.py`` lazily imported ``Hexagram``,
+        which meant the frequency-domain module depended on the data
+        model.  Now the data model exposes its phase representation
+        directly, and spectrum only depends on primitive types.
+        """
+        return tuple(line.complex_phase for line in self._lines)
+
     def mutate(self, mask: int) -> Hexagram:
         """XOR mutation: flip bits indicated by mask."""
         if not 0 <= mask <= 63:
@@ -192,14 +170,6 @@ class Hexagram:
     def square_position(self) -> tuple[int, int]:
         return (self.square_row(), self.square_col())
 
-    def circular_phase(self) -> int:
-        return _CIRCULAR_ORDER.index(self.fuxi_index)
-
-    def solar_term(self) -> str:
-        from zwm.core.constants import SOLAR_TERMS
-        phase_idx = self.circular_phase()
-        return SOLAR_TERMS[phase_idx % 24]
-
     def hamming_distance(self, other: Hexagram) -> int:
         return (self.normal_order ^ other.normal_order).bit_count()
 
@@ -221,18 +191,6 @@ class Hexagram:
 
     def __str__(self) -> str:
         return self.unicode
-
-
-_CIRCULAR_ORDER: list[int] = [
-    32, 33, 34, 35, 36, 37, 38, 39,
-    40, 41, 42, 43, 44, 45, 46, 47,
-    48, 49, 50, 51, 52, 53, 54, 55,
-    56, 57, 58, 59, 60, 61, 62, 63,
-    31, 30, 29, 28, 27, 26, 25, 24,
-    23, 22, 21, 20, 19, 18, 17, 16,
-    15, 14, 13, 12, 11, 10,  9,  8,
-     7,  6,  5,  4,  3,  2,  1,  0,
-]
 
 
 _ALL_HEXAGRAMS: list[Hexagram] = []
@@ -261,11 +219,16 @@ def hexagram_from_trigrams(upper: Trigram, lower: Trigram) -> Hexagram:
     return Hexagram(ll, lm, lu, ul, um, uu)
 
 
+_NAME_TO_HEXAGRAM: dict[str, Hexagram] = {}
+
 def hexagram_from_name(name: str) -> Hexagram:
-    for h in _ALL_HEXAGRAMS:
-        if h.name == name:
-            return h
-    raise ValueError(f"Unknown hexagram name: {name}")
+    if not _NAME_TO_HEXAGRAM:
+        for h in _ALL_HEXAGRAMS:
+            _NAME_TO_HEXAGRAM[h.name] = h
+    try:
+        return _NAME_TO_HEXAGRAM[name]
+    except KeyError as err:
+        raise ValueError(f"Unknown hexagram name: {name}") from err
 
 
 def all_hexagrams() -> tuple[Hexagram, ...]:

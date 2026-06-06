@@ -1,0 +1,144 @@
+# ZWM Helm Chart 默认配置
+
+# 副本数
+replicaCount: 1
+
+# 镜像配置
+image:
+  repository: civilis-ai/zwm
+  pullPolicy: IfNotPresent
+  tag: "0.1.0"
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+# 服务账号
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+# Pod 注解
+podAnnotations:
+  prometheus.io/scrape: "true"
+  prometheus.io/port: "8000"
+  prometheus.io/path: "/metrics"
+
+podSecurityContext: {}
+securityContext: {}
+
+# ─── ZWM Agent 配置 ──────────────────────────────
+zwm:
+  # 数据库路径 (持久化)
+  dbPath: /data/zwm_episodes.db
+  # Checkpoint 路径
+  checkpointPath: /data/zwm_checkpoint.pt
+  # MCTS 迭代数
+  mctsIterations: 200
+  # 粒子滤波集成大小
+  nParticles: 16
+  # 是否启用扩散采样
+  useDiffusion: true
+  # 是否启用 LLM 推理
+  llmEnabled: false
+  # LLM 提供商 (auto / anthropic / openai / deepseek)
+  llmProvider: auto
+
+# ─── 服务 ───────────────────────────────────────
+service:
+  # REST API 端口
+  rest:
+    enabled: true
+    type: ClusterIP
+    port: 8000
+    targetPort: 8000
+  # gRPC 端口
+  grpc:
+    enabled: true
+    type: ClusterIP
+    port: 50051
+    targetPort: 50051
+  # MCP HTTP 端口
+  mcp:
+    enabled: true
+    type: ClusterIP
+    port: 8765
+    targetPort: 8765
+  # WebSocket 端口
+  ws:
+    enabled: true
+    type: ClusterIP
+    port: 8000
+    targetPort: 8000
+
+# ─── Ingress ─────────────────────────────────────
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: zwm.local
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+# ─── 资源限制 ─────────────────────────────────────
+resources:
+  requests:
+    memory: "512Mi"
+    cpu: "500m"
+  limits:
+    memory: "4Gi"
+    cpu: "4"
+
+# GPU 资源 (可选)
+gpu:
+  enabled: false
+  count: 1
+  type: nvidia.com/gpu  # 或 amd.com/gpu / intel.com/gpu
+
+# ─── 持久化存储 ───────────────────────────────────
+persistence:
+  enabled: true
+  # 使用 PVC 模板
+  storageClass: ""
+  accessMode: ReadWriteOnce
+  size: 10Gi
+  # 或使用 hostPath (开发用)
+  hostPath: ""
+
+# ─── Horizontal Pod Autoscaler ────────────────────
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 5
+  targetCPUUtilizationPercentage: 80
+  targetMemoryUtilizationPercentage: 80
+
+# ─── 环境变量 ─────────────────────────────────────
+env:
+  # LLM API Keys (建议使用 Kubernetes Secrets)
+  ANTHROPIC_API_KEY: ""
+  OPENAI_API_KEY: ""
+  DEEPSEEK_API_KEY: ""
+  # 可观测性
+  ZWM_OTLP_ENDPOINT: ""
+  OTEL_EXPORTER_OTLP_ENDPOINT: ""
+
+# 使用已有 Secrets
+envFromSecrets: []
+# - secretRef:
+#     name: zwm-llm-keys
+
+# ─── 节点选择 / 容忍度 ─────────────────────────────
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+# ─── Sidecar (Grafana Agent / OTel Collector) ────
+sidecars: []
+# - name: otel-collector
+#   image: otel/opentelemetry-collector-contrib:latest
+#   ...

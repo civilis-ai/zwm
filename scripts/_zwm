@@ -1,0 +1,76 @@
+# zsh completion for `zwm` — save to a directory on $fpath
+# (typically ~/.zsh/completions/_zwm) and add `compinit` to your .zshrc:
+#
+#     autoload -U compinit && compinit
+#
+# Provides the same coverage as the bash completion in
+# `scripts/zwm-completion.bash`.
+
+#compdef zwm
+
+_zwm() {
+    local -a commands
+    commands=(
+        'tick:Run N steps of the OODA loop'
+        'eval:Evaluate a checkpoint'
+        'replay:Replay the SQLite episodic store'
+        'info:Print framework info'
+        'inspect:Inspect the episodic store and ReAct reflections'
+        'serve:Launch the FastAPI server'
+        'mcp:Launch the MCP server (stdio)'
+        'mcp-http:Launch the MCP server (Streamable-HTTP)'
+        'otlp:Configure the OTLP tracing exporter'
+        'spans:Print the most recent N spans'
+        'a2a:Launch the A2A multi-agent coordinator'
+        'a2a-serve:Launch the A2A cross-process HTTP transport'
+    )
+
+    _arguments -C \
+        '1: :->cmd' \
+        '*:: :->args'
+
+    case $state in
+        cmd)
+            _describe 'command' commands
+            ;;
+        args)
+            case $words[1] in
+                tick|eval)
+                    _arguments \
+                        '--steps[OODA steps]:n:' \
+                        '--year[Starting year]:n:' \
+                        '--seed[Starting hexagram name]:name:' \
+                        '--period[Reward period]:period:' \
+                        '--mcts_iterations[MCTS budget]:n:' \
+                        '--n_particles[Particle filter ensemble]:n:' \
+                        '--use_diffusion[Use diffusion sampler]' \
+                        '--learnable_encoder[Use learnable encoder]' \
+                        '--hierarchical[Use hierarchical predictor]' \
+                        '--use_fsdp2[Use FSDP2 distributed training]' \
+                        '--use_react[Use ReAct tool-use loop]' \
+                        '--db_path[SQLite path]:path:_files' \
+                        '--json[JSON output]'
+                    ;;
+                replay|inspect)
+                    _arguments \
+                        '--db[DB path]:path:_files' \
+                        '--limit[Limit]:n:' \
+                        '--show-reflections[Show ReAct reflections]' \
+                        '--json[JSON output]'
+                    ;;
+                info)
+                    _arguments '--json[JSON output]'
+                    ;;
+                serve|mcp-http|a2a-serve)
+                    _arguments \
+                        '--host[Bind host]:host:' \
+                        '--port[Bind port]:port:' \
+                        '--reload[Auto-reload]' \
+                        '--log-level[Log level]:level:(debug info warning error)'
+                    ;;
+            esac
+            ;;
+    esac
+}
+
+_zwm "$@"

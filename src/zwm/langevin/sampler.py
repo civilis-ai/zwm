@@ -16,20 +16,28 @@ class LangevinSampler:
         num_steps: int = 100,
         temperature_init: float = 1.0,
         cooling_rate: float = 0.95,
+        seed: int | None = None,
     ) -> None:
         self._epsilon = step_size
         self._noise_scale = noise_scale
         self._num_steps = num_steps
         self._temperature_init = temperature_init
         self._cooling_rate = cooling_rate
+        # F3: explicit seed for reproducible sampling.  When None,
+        # falls back to a fresh entropy-seeded RNG (previous behaviour).
+        self._seed = seed
 
     def sample(
         self,
         h_current: Hexagram,
         h_target: Hexagram | None = None,
+        seed: int | None = None,
     ) -> list[tuple[Hexagram, float]]:
-        rng = np.random.default_rng()
-        pv = h_current.normal_order
+        # Per-call seed overrides the constructor default.  Useful
+        # when callers want to explore different noise realisations
+        # without re-instantiating the sampler.
+        effective_seed = seed if seed is not None else self._seed
+        rng = np.random.default_rng(effective_seed)
         trajectory: list[tuple[Hexagram, float]] = []
 
         phase = np.array([
