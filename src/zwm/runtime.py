@@ -216,17 +216,10 @@ class ZWMEngine:
     # ── 交流 ──
 
     def ask(self, question: str) -> str:
-        """与 agent 对话 — 基于真实内部状态的回复.
-
-        有 LLM: 真实状态 → LLM 自然语言
-        无 LLM: 真实状态 → 结构化摘要
-        绝不使用硬编码模板。
-        """
-        # 委托给 _introspect — 它已经做了"真实状态 → 回复"的逻辑
-        reply = self._introspect(question)
-        if reply:
-            return reply
-        # 无法内省的问题 → 至少返回状态摘要
+        """与 agent 对话 — LLM 基于真实内部状态回复."""
+        action = self._understand(question)
+        if action and action.get("text"):
+            return action["text"]
         return self._describe_world()
 
     def _describe_world(self) -> str:
@@ -261,104 +254,106 @@ class ZWMEngine:
     # ── 执行指令 ──
 
     def execute(self, instruction: str) -> EngineState:
-        """接收人类指令并执行.
+        """接收人类指令 — LLM 理解意图, 自主决定行动或回复.
 
-        优先用 LLM 理解, 无 LLM 时用关键词匹配 + 内省回复。
-        """
-        ss = self._agent.self_state
-        inst = instruction.strip()
-
-        # ── 内省/身份类问题 (无需移动, 直接回复) ──
-        introspect = self._introspect(inst)
-        if introspect:
-            state = EngineState(tick=self._step)
-            state.human_message = instruction
-            state.agent_reply = introspect
-            self._history.append(state)
-            return state
-
-        # ── 方向/行动指令 → OODA ──
-        target = self._parse_target(inst, ss)
-        harmony = ss.harmony_score(target)
-        reward = harmony * 0.8 + 0.2
-        state = self.tick(reward=reward)
-        state.human_message = instruction
-        state.agent_reply = (
-            f"收到: {instruction}. "
-            f"→宫{target}({ss.relation_to(target)}, 和谐度{harmony:.1f}). "
-            f"卦:{state.next_hexagram}, JEPA={state.jepa_loss:.4f}."
-        )
-        return state
-
-    def _introspect(self, inst: str) -> str | None:
-        """真正的内省 — 从 agent 的真实内部状态构造回复, 不做硬编码匹配.
-
-        不使用关键词→固定文本的映射。而是:
-          1. 调用所有内部状态源 (Self, Time, JEPA, Memory)
-          2. 让 LLM 根据这些真实状态生成回复 (如果有 LLM)
-          3. 无 LLM 时, 用结构化状态摘要作为回复
+        无硬编码关键词. 所有意图理解由 LLM 完成.
+        无 LLM 时回退到真实状态摘要.
         """
         ss = self._agent.self_state
         tc = getattr(self._agent, "_time_context", None)
-        last = self._history[-1] if self._history else None
 
-        # 收集当前的真实内部状态
-        facts = [f"自我: 日{ss.day_gan}·{ss.self_element}, 永远在中宫(5)"]
-        facts.append(f"六亲: {ss.six_relations}")
+        # ── LLM 理解指令意图 ──
+        action = self._understand(instruction)
+        if action is None:
+            # LLM 不可用或理解失败 → 状态摘要
+            return self._fallback_reply(instruction)
+
+        # ── 执行 LLM 决定 ──
+        if action["type"] == "reply":
+            state = EngineState(tick=self._step)
+            state.human_message = instruction
+            state.agent_reply = action["text"]
+            self._history.append(state)
+            return state
+
+        elif action["type"] == "act":
+            target = max(1, min(9, action.get("palace", ss.next_to_explore())))
+            harmony = ss.harmony_score(target)
+            reward = harmony * 0.8 + 0.2
+            state = self.tick(reward=reward)
+            state.human_message = instruction
+            state.agent_reply = action.get("text", "") or (
+                f"→宫{target}({ss.relation_to(target)}). "
+                f"卦:{state.next_hexagram}, JEPA={state.jepa_loss:.4f}."
+            )
+            return state
+
+        # fallback
+        return self._fallback_reply(instruction)
+
+    def _understand(self, instruction: str) -> dict | None:
+        """LLM 理解指令意图 → 结构化行动.
+
+        Returns:
+            {"type": "reply", "text": "..."}   — 只需要回答
+            {"type": "act", "palace": N, "text": "..."} — 需要行动
+            None — LLM 不可用
+        """
+        if self._llm_router is None:
+            return None
+
+        ss = self._agent.self_state
+        tc = getattr(self._agent, "_time_context", None)
+
+        # 真实状态 (供 LLM 推理)
+        facts = [
+            f"你的自我: 日{ss.day_gan}·{ss.self_element}, 永远在中宫(5).",
+            f"六亲关系: {ss.six_relations}",
+            f"已探索宫位: {ss.palace_visits}",
+        ]
         if tc:
             facts.append(f"时间: {tc.ganzhi_str}, {tc.solar_term_name}节气, "
-                        f"午会, 值年卦#{tc.value_year_hex}")
-        facts.append(f"运行: {self._step} ticks, 已探索{ss.total_visits}/8宫位")
+                        f"午会, 值年卦#{tc.value_year_hex}.")
+        last = self._history[-1] if self._history else None
         if last:
-            facts.append(f"最近: 卦{last.next_hexagram}, JEPA loss={last.jepa_loss:.4f}")
-            if last.z_world is not None:
-                facts.append(f"世界向量维度: {last.z_world.shape}")
+            facts.append(f"最近行动: 卦{last.next_hexagram}, "
+                        f"JEPA loss={last.jepa_loss:.4f}.")
 
-        # LLM 路径: 让 LLM 基于真实状态生成自然语言回复
-        if self._llm_router is not None:
-            try:
-                prompt = (
-                    f"你是 ZWM, 一个基于易经数学的世界模型智能体. "
-                    f"以下是你的当前真实状态:\n"
-                    + "\n".join(facts) +
-                    f"\n\n人类问你: {inst}\n"
-                    f"请根据你的真实状态, 用第一人称回答 (2-4句). "
-                    f"不要编造你不知道的信息."
-                )
-                resp = self._llm_router._backend.generate(
-                    prompt, max_tokens=200, temperature=0.7,
-                )
-                return resp.text.strip()
-            except Exception as e:
-                _log.debug("LLM introspect failed: %s", e)
+        prompt = (
+            "你是 ZWM, 一个基于易经数学的世界模型智能体. "
+            "你永远在中宫(5), 周围是九宫八方, 每个方向与你有六亲关系.\n\n"
+            + "\n".join(facts) +
+            f"\n\n人类说: \"{instruction}\"\n\n"
+            "请判断: 这是一个需要行动的方向指令, 还是需要回复的问题?\n\n"
+            "如果是方向指令 (如'去北方'/'探索'/'向南'), 返回JSON:\n"
+            '{"type":"act","palace":数字1-9,"text":"你的简短回复"}\n'
+            "(宫殿: 1=北 2=西南 3=东 4=东南 5=中 6=西北 7=西 8=东北 9=南)\n\n"
+            "如果是问题或对话 (如'你是谁'/'今天如何'/'介绍一下自己'), 返回JSON:\n"
+            '{"type":"reply","text":"你的回复(1-4句,基于你的真实状态)"}\n\n'
+            "只返回JSON, 不要其他内容."
+        )
+        try:
+            resp = self._llm_router._backend.generate(
+                prompt, max_tokens=300, temperature=0.3, json_mode=False,
+            )
+            import json, re
+            text = resp.text.strip()
+            # 提取 JSON (LLM 可能在前后加文字)
+            match = re.search(r'\{[^{}]*"type"[^{}]*\}', text, re.DOTALL)
+            if match:
+                return json.loads(match.group())
+        except Exception as e:
+            _log.debug("LLM understand failed: %s", e)
+        return None
 
-        # 无 LLM 回退: 返回结构化事实 (这是真实状态, 不是硬编码)
-        return " | ".join(facts)
+    def _fallback_reply(self, instruction: str) -> EngineState:
+        """LLM 不可用时的回退 — 真实状态摘要."""
+        state = EngineState(tick=self._step)
+        state.human_message = instruction
+        state.agent_reply = self._describe_world()
+        self._history.append(state)
+        return state
 
-    def _parse_target(self, inst: str, ss) -> int:
-        """从指令解析目标宫位."""
-        inst_lower = inst.lower()
-        if "北" in inst or "north" in inst_lower:
-            return 1
-        elif "南" in inst or "south" in inst_lower:
-            return 9
-        elif "东" in inst or "east" in inst_lower:
-            return 3
-        elif "西" in inst or "west" in inst_lower:
-            return 7
-        elif "西南" in inst:
-            return 2
-        elif "西北" in inst:
-            return 6
-        elif "东南" in inst:
-            return 4
-        elif "东北" in inst:
-            return 8
-        elif "中" in inst or "回" in inst:
-            return 5
-        elif "探索" in inst or "explore" in inst_lower:
-            return ss.next_to_explore()
-        return ss.next_to_explore()
 
     # ── 辅助 ──
 
