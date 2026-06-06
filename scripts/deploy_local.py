@@ -194,10 +194,11 @@ class ZWMLocalAgent:
         # 有摄像头画面则叠加, 没有则黑底
         if self._last_frame is not None:
             display = cv2.resize(self._last_frame, (448, 448))
+            # 立体参考: 十字瞄准线 (水平八方 + 垂直天地)
             h, w = 448, 448
-            for i in range(1, 3):
-                cv2.line(display, (w*i//3, 0), (w*i//3, h), (0,255,0), 1)
-                cv2.line(display, (0, h*i//3), (w, h*i//3), (0,255,0), 1)
+            cv2.line(display, (w//2, 0), (w//2, h), (0,255,0), 1)  # 竖线
+            cv2.line(display, (0, h//2), (w, h//2), (0,255,0), 1)  # 横线
+            cv2.circle(display, (w//2, h//2), 10, (0,255,0), 1)    # 中宫
         else:
             display = np.zeros((448, 448, 3), dtype=np.uint8)
 
@@ -208,8 +209,12 @@ class ZWMLocalAgent:
         cv2.putText(display, f"ZWM | {ss.day_gan}·{ss.self_element} | Center",
                    (10, y), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0,255,0), 2)
         y += 30
-        cv2.putText(display, f"N={ss.relation_to(1)} S={ss.relation_to(9)} E={ss.relation_to(3)} W={ss.relation_to(7)}",
-                   (10, y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0,255,255), 1)
+        # 立体八方 + 上下
+        cv2.putText(display, f"[{ss.relation_to(10)}] N={ss.relation_to(1)} S={ss.relation_to(9)} E={ss.relation_to(3)} W={ss.relation_to(7)} [{ss.relation_to(11)}]",
+                   (10, y), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0,255,255), 1)
+        y += 22
+        cv2.putText(display, f"天(上) · 人(中:八面) · 地(下)   layer: 天地人",
+                   (10, y), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (150,150,150), 1)
         y += 25
         if self._last_hex_field is not None:
             act = int((self._last_hex_field.mean(axis=1) > 0.5).sum())
@@ -293,7 +298,8 @@ class ZWMLocalAgent:
                 has_gui = False
 
         print("\n" + "="*56)
-        print("  [SPACE]=OODA [T]=对话 [1-9]=宫位 [S]=状态 [Q]=退出")
+        print("  [SPACE]=OODA [T]=对话 [1-9]=八方 [0]=上(天) [-]=下(地)")
+        print("  [S]=状态 [Q]=退出")
         print("="*56 + "\n")
 
         tick_count = 0
@@ -385,10 +391,25 @@ class ZWMLocalAgent:
             elif ord('1') <= key <= ord('9'):
                 palace = key - ord('0')
                 ss = self._engine.self_state
-                self._display_message = f"Going to G{palace}({ss.relation_to(palace)})..."
-                self._display_message_timer = 20
+                rel = ss.relation_to(palace)
+                self._display_message = f"G{palace}({rel})..."
+                self._display_message_timer = 15
                 state = self._engine.execute(f"探索宫位{palace}")
-                self._display_message = f"G{palace}: {state.next_hexagram} JEPA={state.jepa_loss:.4f}"
+                self._display_message = f"G{palace}({rel}): {state.next_hexagram}"
+                self._display_message_timer = 60
+            elif key == ord('0'):  # 0 = 上(天)
+                ss = self._engine.self_state
+                self._display_message = f"Looking UP (天)..."
+                self._display_message_timer = 15
+                state = self._engine.execute(f"向上看")
+                self._display_message = f"天(上): {state.next_hexagram}"
+                self._display_message_timer = 60
+            elif key == ord('-'):  # - = 下(地)
+                ss = self._engine.self_state
+                self._display_message = f"Looking DOWN (地)..."
+                self._display_message_timer = 15
+                state = self._engine.execute(f"向下看")
+                self._display_message = f"地(下): {state.next_hexagram}"
                 self._display_message_timer = 60
 
         self.stop()
