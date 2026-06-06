@@ -41,6 +41,10 @@ class ZWMLocalAgent:
         self._last_frame = None
         self._last_hex_field = None
         self._recognizer = None
+        self._input_mode = False      # GUI 输入模式
+        self._input_buffer = ""       # GUI 输入缓冲
+        self._display_message = ""    # GUI 状态消息
+        self._display_message_timer = 0  # 消息显示计时器
 
     def start(self):
         """启动智能体."""
@@ -223,8 +227,22 @@ class ZWMLocalAgent:
                 for line in self._wrap_text(last.agent_reply, 70):
                     cv2.putText(display, line, (10, y), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0,255,0), 1)
                     y += 18
-        cv2.putText(display, "[SPACE]=tick [T]=talk [1-9]=gong [Q]=quit",
-                   (10, 430), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (150,150,150), 1)
+        # 输入模式提示
+        if self._input_mode:
+            cv2.putText(display, f"> {self._input_buffer}_",
+                       (10, 380), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,255,255), 2)
+            cv2.putText(display, "[Enter]=send [Esc]=cancel",
+                       (10, 410), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (150,150,150), 1)
+        else:
+            cv2.putText(display, "[SPACE]=tick [T]=talk [1-9]=gong [S]=status [Q]=quit",
+                       (10, 430), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (150,150,150), 1)
+
+        # 状态消息 (短暂显示)
+        if self._display_message and self._display_message_timer > 0:
+            cv2.putText(display, self._display_message[:60],
+                       (10, 400), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0,255,255), 1)
+            self._display_message_timer -= 1
+
         return display
 
     @staticmethod
@@ -327,27 +345,51 @@ class ZWMLocalAgent:
                 else:
                     key = ord('t')
 
-            # 处理按键
+            # ── 输入模式: 收集字符 ──
+            if self._input_mode:
+                if key == 13:  # Enter
+                    text = self._input_buffer.strip()
+                    self._input_buffer = ""
+                    self._input_mode = False
+                    if text:
+                        self._display_message = f"Sending: {text[:40]}..."
+                        self._display_message_timer = 30
+                        state = self._engine.execute(text)
+                        self._display_message = f"ZWM: {state.agent_reply[:80]}"
+                        self._display_message_timer = 120
+                elif key == 27:  # Esc
+                    self._input_buffer = ""
+                    self._input_mode = False
+                elif key == 8:  # Backspace
+                    self._input_buffer = self._input_buffer[:-1]
+                elif 32 <= key <= 126:  # printable ASCII
+                    self._input_buffer += chr(key)
+                continue
+
+            # ── 正常模式: 处理命令键 ──
             if key == ord('q') or key == 27:
                 break
             elif key == ord(' '):
                 tick_count += 1
                 result = self.tick()
-                print(f"[{tick_count}] {result['action']} g{result['target']} JEPA={result['jepa']:.4f}")
+                self._display_message = f"Tick {tick_count}: {result['action']} g{result['target']} JEPA={result['jepa']:.4f}"
+                self._display_message_timer = 60
             elif key == ord('t'):
-                print("\n" + "="*50)
-                text = input("  You: ").strip()
-                print("="*50)
-                if text:
-                    state = self._engine.execute(text)
-                    print(f"  ZWM: {state.agent_reply}")
+                self._input_mode = True
+                self._input_buffer = ""
+                self._display_message = "Type your message, Enter to send"
+                self._display_message_timer = 30
             elif key == ord('s'):
-                print("\n" + self.status_panel())
+                self._display_message = self.status_panel().replace('\n', ' | ')
+                self._display_message_timer = 180
             elif ord('1') <= key <= ord('9'):
                 palace = key - ord('0')
                 ss = self._engine.self_state
+                self._display_message = f"Going to G{palace}({ss.relation_to(palace)})..."
+                self._display_message_timer = 20
                 state = self._engine.execute(f"探索宫位{palace}")
-                print(f"  G{palace}({ss.relation_to(palace)}) -> {state.next_hexagram}")
+                self._display_message = f"G{palace}: {state.next_hexagram} JEPA={state.jepa_loss:.4f}"
+                self._display_message_timer = 60
 
         self.stop()
 
