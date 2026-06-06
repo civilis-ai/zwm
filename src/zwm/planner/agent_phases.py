@@ -25,6 +25,7 @@ from zwm.planner.agent_priors import (
     _world_vector,
 )
 from zwm.planner.agent_train import (
+    _counterfactual_train,
     _dreamer_replay,
     _gae_flush,
     _joint_train_step,
@@ -57,11 +58,17 @@ def _observe(
 ) -> int:
     """Read all time/space signals; pick the next target palace.
 
-    P0: agent.self_state 作为"我"的单一来源。
-    self_state.next_to_explore() 替代 _next_palace_to_explore()。
+    P0: agent.self_state 作为"我"的单一来源。SelfState owns the
+    trinity target (八方 + 上/下); this phase projects it to the
+    planar Luoshu palace consumed by EFE/MCTS.
     """
     if target_palace is None:
-        target_palace = agent.self_state.next_to_explore()
+        exploration_target = agent.self_state.next_spatial_to_explore()
+        target_palace = agent.self_state.to_luoshu_palace(exploration_target)
+    else:
+        exploration_target = target_palace
+        target_palace = agent.self_state.to_luoshu_palace(target_palace)
+    agent._last_exploration_target = exploration_target
 
     # 构建完整的 TimeContext
     from zwm.scene_field.time_context import TimeContext
@@ -623,6 +630,14 @@ def _learn_world_update(
         agent, z_world, z_actual, h_current, h_next,
         grid, time_phase, result, reward,
     )
+    # 反事实训练: 综卦(对面视角) + 错卦(完全反转) → 增强 JEPA 世界理解
+    rev_loss, cmp_loss = _counterfactual_train(
+        agent, result.chain, z_world, time_phase,
+    )
+    if rev_loss or cmp_loss:
+        joint_losses["counterfactual_reversed"] = rev_loss
+        joint_losses["counterfactual_complement"] = cmp_loss
+
     from zwm.planner.agent_train import _update_preferences
     _update_preferences(agent, h_current, result, reward)
     agent.hebbian.update_from_episode(
@@ -865,11 +880,15 @@ def _learn(
     """
     from zwm.planner.agent_data import TickReport
 
-    # 1) Record the palace visit (cheap, no I/O).
-    agent._palace_visits[target_palace] = (
-        agent._palace_visits.get(target_palace, 0) + 1
-    )
-    agent.self_state.record_visit(target_palace)
+    # 1) Record the visit (cheap, no I/O). ``_palace_visits`` is the
+    # planar planner memory and excludes the self-center. SelfState keeps
+    # the original trinity target, including 10=上/天 and 11=下/地.
+    if target_palace != grid.self_position:
+        agent._palace_visits[target_palace] = (
+            agent._palace_visits.get(target_palace, 0) + 1
+        )
+    exploration_target = getattr(agent, "_last_exploration_target", target_palace)
+    agent.self_state.record_visit(exploration_target)
 
     # 2) World-model gradient + preference / Hebbian / GRPO buffer.
     calendar_ctx = _calendar_context(agent, year, month, day, hour)

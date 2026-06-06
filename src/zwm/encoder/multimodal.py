@@ -554,7 +554,7 @@ class MultimodalEncoder(HexagramEncoder, nn.Module):
         # multiplied by the original weight (0.33) on a 0.5 vector,
         # dragging the fused signal toward 0.5 and biasing every
         # yao classifier toward YIN (since ``> 0.5 → YANG``).
-        raw_w = self._raw_weights  # (sensor, vision, language) softmax logits
+        raw_w = self.channel_weights
         signals = [sensor_signals, vision_signals, language_signals]
         active = [s is not None for s in signals]
         if not any(active):

@@ -255,8 +255,14 @@ class AgentBuilder:
     def build_observability(self) -> None:
         """Auto-init OTLP / OTel tracing."""
         try:
-            from zwm.tracing import configure_otlp_from_env, get_tracer
-            configure_otlp_from_env()
+            from zwm.tracing import configure_otlp, configure_otlp_from_env, get_tracer
+            if self.config.enable_otlp:
+                configure_otlp(
+                    endpoint=self.config.otlp_endpoint,
+                    service_name=self.config.otlp_service_name,
+                )
+            else:
+                configure_otlp_from_env()
             get_tracer()
         except Exception as exc:
             _log.debug("auto-init observability skipped: %s", exc)

@@ -467,11 +467,11 @@ def configure_otlp_from_env() -> bool:
     * ``ZWM_OTLP_TIMEOUT``             — seconds (default 10)
 
     Returns ``True`` on success, ``False`` if the SDK is not installed
-    or the env vars explicitly disable the exporter
-    (``ZWM_OTLP_ENABLED=0``).
+    or the env vars do not explicitly enable the exporter
+    (``ZWM_OTLP_ENABLED=1``).
     """
-    if os.environ.get("ZWM_OTLP_ENABLED", "1") == "0":
-        _log.info("configure_otlp_from_env: disabled via ZWM_OTLP_ENABLED=0")
+    if os.environ.get("ZWM_OTLP_ENABLED", "0") != "1":
+        _log.info("configure_otlp_from_env: disabled (set ZWM_OTLP_ENABLED=1 to enable)")
         return False
     return configure_otlp(
         endpoint=None,

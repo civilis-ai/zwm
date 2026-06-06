@@ -170,8 +170,14 @@ class TrinityAgent:
         # downgrades when neither is available (e.g. unit tests
         # that monkey-patch tracing out).
         try:
-            from zwm.tracing import configure_otlp_from_env, get_tracer
-            configure_otlp_from_env()
+            from zwm.tracing import configure_otlp, configure_otlp_from_env, get_tracer
+            if self.config.enable_otlp:
+                configure_otlp(
+                    endpoint=self.config.otlp_endpoint,
+                    service_name=self.config.otlp_service_name,
+                )
+            else:
+                configure_otlp_from_env()
             get_tracer()  # ensure the singleton is built
         except Exception as exc:  # pragma: no cover — defensive
             _log.debug("auto-init observability skipped: %s", exc)
@@ -631,6 +637,8 @@ class TrinityAgent:
             hour=hour,
             vision_features=vision_features,
             language_features=language_features,
+            language_text=language_text,
+            sensor_data=sensor_data,
         )
 
     def tick(
@@ -648,6 +656,7 @@ class TrinityAgent:
         vision_features: np.ndarray | None = None,
         language_features: np.ndarray | None = None,
         language_text: str | None = None,
+        sensor_data: dict | None = None,
     ) -> TickReport:
         """OODA loop orchestrator — dispatches to focused phase modules.
 
@@ -661,15 +670,19 @@ class TrinityAgent:
         from zwm.tracing import get_tracer
 
         grid = grid if grid is not None else self.grid
-        # 缓存传感器数据 — 供 field encoder 在 _predict 中使用
-        sensor_data = {
-            "temperature": 0.5 + 0.4 * math.sin(self._step_count / 5.0),
-            "terrain": 0.5 + 0.3 * math.cos(self._step_count / 7.0),
-            "social_proximity": abs(math.sin(self._step_count / 10.0)),
-            "resource_level": 0.5 + 0.2 * math.sin(self._step_count / 3.0 + 1.0),
-            "momentum": 0.5 * math.cos(self._step_count / 4.0),
-            "overall_favorability": 0.5 + 0.3 * math.sin(self._step_count / 6.0),
-        }  # fallback — 真实传感器数据由 caller 的 observe_predict_evaluate_act 提供
+        # 缓存传感器数据 — 供 field encoder 在 _predict 中使用。直接
+        # tick(h_current=...) 没有感知载荷时才生成回退传感器；REST /
+        # runtime / multimodal 入口会通过 observe_predict_evaluate_act()
+        # 把真实 sensor_data 传进来。
+        if sensor_data is None:
+            sensor_data = {
+                "temperature": 0.5 + 0.4 * math.sin(self._step_count / 5.0),
+                "terrain": 0.5 + 0.3 * math.cos(self._step_count / 7.0),
+                "social_proximity": abs(math.sin(self._step_count / 10.0)),
+                "resource_level": 0.5 + 0.2 * math.sin(self._step_count / 3.0 + 1.0),
+                "momentum": 0.5 * math.cos(self._step_count / 4.0),
+                "overall_favorability": 0.5 + 0.3 * math.sin(self._step_count / 6.0),
+            }
         self._last_sensor_data = sensor_data
 
         # Reward validation runs *first* so NaN/Inf surface as
@@ -728,6 +741,7 @@ class TrinityAgent:
                         self, h_current, grid, time_phase, day_gan,
                         year, month, day, hour,
                     )
+                    self._last_prediction = prediction
                     span.set_attribute("zwm.z_world_dim", int(getattr(prediction, "z_world", np.zeros(0)).shape[0]) if hasattr(prediction, "z_world") else 0)
         except Exception:
             metrics.inc_errors()
@@ -741,6 +755,8 @@ class TrinityAgent:
                         self, h_current, grid, time_phase, target_palace, day_gan,
                         prediction, vision_features, language_features,
                     )
+                    self._last_plan = result
+                    self._last_target_palace = target_palace
                     if result is not None and getattr(result, "hexagram_scores", None):
                         efe = float(result.hexagram_scores[0][1])
                         metrics.set_efe_value(efe)
@@ -777,6 +793,7 @@ class TrinityAgent:
                         codon, codon_aa, mutation_class, year, month, day, hour,
                         target_palace=target_palace,
                     )
+                    self._last_report = report
                     span.set_attribute("zwm.episode_id", int(report.episode_id))
                     span.set_attribute("zwm.mutation_class", str(report.mutation_class))
         except Exception:

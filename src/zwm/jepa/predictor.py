@@ -805,6 +805,17 @@ class JEPAPredictor(nn.Module):
         """
         x_t = self._as_tensor(z_current).detach()
         x_next = self._as_tensor(z_next).detach()
+        # 维度归一化: 确保所有 replay 条目同维度
+        if x_t.shape[-1] != self.input_dim:
+            if x_t.shape[-1] < self.input_dim:
+                x_t = torch.nn.functional.pad(x_t, (0, self.input_dim - x_t.shape[-1]))
+            else:
+                x_t = x_t[..., :self.input_dim]
+        if x_next.shape[-1] != self.input_dim:
+            if x_next.shape[-1] < self.input_dim:
+                x_next = torch.nn.functional.pad(x_next, (0, self.input_dim - x_next.shape[-1]))
+            else:
+                x_next = x_next[..., :self.input_dim]
         if not (torch.isfinite(x_t).all() and torch.isfinite(x_next).all()):
             return {"loss": float("nan"), "pred_error": float("nan")}
         self._replay.append((x_t, x_next))

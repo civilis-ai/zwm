@@ -63,6 +63,7 @@ class EngineState:
     # 规划
     plan: Any = None
     target_palace: int = 5
+    exploration_target: int = 5
     # 行动
     action_taken: str = ""
     next_hexagram: str = ""
@@ -72,6 +73,7 @@ class EngineState:
     # 通信
     human_message: str = ""
     agent_reply: str = ""
+    report: Any = None
 
 
 class ZWMEngine:
@@ -92,6 +94,7 @@ class ZWMEngine:
         import os
         os.environ["ZWM_DAY_GAN"] = day_gan
         self._day_gan = day_gan
+        self._config_overrides = dict(kwargs)
         self._agent = None
         self._llm_router = None
         self._history: list[EngineState] = []
@@ -99,18 +102,22 @@ class ZWMEngine:
 
     # ── 激活 ──
 
-    def activate(self, db_path: str = ":memory:") -> "ZWMEngine":
+    def activate(self, db_path: str | None = None) -> "ZWMEngine":
         """首次激活——创建 agent, 加载 SelfState, 初始化所有子系统."""
         from zwm.planner.agent import TrinityAgent
         from zwm.planner.agent_config import TrinityConfig
 
-        config = TrinityConfig(
-            db_path=db_path,
+        config_data = dict(
+            db_path=db_path or self._config_overrides.get("db_path", ":memory:"),
             use_field_encoder=True,
             mcts_iterations=80,
             n_particles=4,
             use_react=True,
         )
+        config_data.update(self._config_overrides)
+        if db_path is not None:
+            config_data["db_path"] = db_path
+        config = TrinityConfig.from_dict(config_data)
         self._agent = TrinityAgent(config=config)
         self._llm_router = getattr(self._agent, "_llm_router", None)
 
@@ -121,7 +128,10 @@ class ZWMEngine:
 
     def tick(self, sensor_data: dict | None = None,
              year: int = 2026, month: int = 6, day: int = 9, hour: int = 8,
-             reward: float | None = None) -> EngineState:
+             reward: float | None = None,
+             target_palace: int | None = None,
+             language_text: str | None = None,
+             vision_features: np.ndarray | None = None) -> EngineState:
         """一次完整的 OODA 循环.
 
         Args:
@@ -146,36 +156,39 @@ class ZWMEngine:
 
         # ── 1. 感知 ──
         state.sensor_data = sensor_data or self._default_sensors()
-        state.hex_field = self._agent.field_encoder.encode(state.sensor_data)
-        self._agent._last_sensor_data = state.sensor_data
-        self._agent._last_hex_field = state.hex_field
+        if self._agent.field_encoder is not None:
+            state.hex_field = self._agent.field_encoder.encode(state.sensor_data)
 
         # ── 2. 思考 (ReAct + LLM) ──
         state.llm_thought = self._think(state)
 
         # ── 3-5. OODA ──
-        from zwm.core.hexagram import hexagram_from_name
-        # 使用上一轮的演化卦象, 首轮用乾为天
-        if self._history and self._history[-1].next_hexagram:
-            h_current = hexagram_from_name(self._history[-1].next_hexagram)
-        else:
-            h_current = hexagram_from_name("乾为天")
-
         r = reward if reward is not None else 0.5 + 0.4 * (0.5 - abs((self._step % 20) / 10.0 - 1.0))
-        report = self._agent.tick(
-            h_current=h_current, reward=r,
+        report = self._agent.observe_predict_evaluate_act(
+            sensor_data=state.sensor_data,
+            reward=r,
             year=year, month=month, day=day, hour=hour,
+            target_palace=target_palace,
+            day_gan=self._day_gan,
+            vision_features=vision_features,
+            language_text=language_text,
         )
 
         state.jepa_loss = report.jepa_loss or 0.0
         state.surprise = report.surprise
+        state.plan = report.plan
+        state.report = report
         state.next_hexagram = report.h_next.name
         state.action_taken = report.mutation_class
-
-        # 记录访问
-        target = getattr(self._agent, "_target_palace", 5) if hasattr(self._agent, "_target_palace") else self._agent.self_state.next_to_explore()
-        state.target_palace = target
-        self._agent.self_state.record_visit(target)
+        state.react_result = getattr(self._agent, "_last_react_result", None)
+        prediction = getattr(self._agent, "_last_prediction", None)
+        if prediction is not None:
+            state.z_world = prediction.z_world
+            state.z_pred = prediction.z_pred
+        state.target_palace = int(getattr(self._agent, "_last_target_palace", target_palace or 5))
+        state.exploration_target = int(
+            getattr(self._agent, "_last_exploration_target", state.target_palace)
+        )
 
         self._history.append(state)
         self._step += 1
@@ -280,7 +293,7 @@ class ZWMEngine:
             target = max(1, min(9, action.get("palace", ss.next_to_explore())))
             harmony = ss.harmony_score(target)
             reward = harmony * 0.8 + 0.2
-            state = self.tick(reward=reward)
+            state = self.tick(reward=reward, target_palace=target, language_text=instruction)
             state.human_message = instruction
             state.agent_reply = action.get("text", "") or (
                 f"→宫{target}({ss.relation_to(target)}). "

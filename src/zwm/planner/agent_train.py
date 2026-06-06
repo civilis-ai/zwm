@@ -32,6 +32,49 @@ if TYPE_CHECKING:
     from zwm.self_field.palace_graph import LuoshuGrid
 
 
+# ================= 五卦链反事实训练 =================
+def _counterfactual_train(
+    agent: "TrinityAgent",
+    chain: "FiveHexagramChain",
+    z_world: np.ndarray,
+    time_phase: float,
+    weight: float = 0.15,
+) -> tuple[float, float]:
+    """用综卦和错卦作为反事实预测目标, 增强 JEPA 的世界理解.
+
+    综卦 = 世界从对面看的样子 (上下颠倒视角)
+    错卦 = 世界的完全反转 (阴阳互换)
+
+    JEPA 学会预测这两种"备选世界状态", 则世界模型不只知道
+    "下一步会发生什么", 还知道"从另一面看会是什么样"和
+    "完全逆转会是什么样"。这提升了世界模型的鲁棒性。
+
+    weight < 1.0 确保反事实训练不主导主预测目标。
+    """
+    h_rev = chain.reversed_
+    h_cmp = chain.complement
+    losses = []
+
+    for h_aux, label in [(h_rev, "reversed"), (h_cmp, "complement")]:
+        try:
+            z_aux = np.concatenate([
+                agent.joint.encode(h_aux, time_phase),
+                np.zeros(29, dtype=np.float32),  # unified field 部分填充0
+            ]).astype(np.float32)
+            # 反事实训练: z_world → z_aux (综卦或错卦)
+            # train_step 内部已自动归一化维度
+            result = agent.jepa.train_step(z_world, z_aux)
+            loss = result.get("pred_error", result.get("loss", 0.0)) if isinstance(result, dict) else 0.0
+            if not np.isnan(loss):
+                losses.append(loss)
+        except Exception as exc:
+            _log.debug("Counterfactual train (%s) skipped: %s", label, exc)
+
+    if len(losses) == 2:
+        return float(losses[0]), float(losses[1])
+    return 0.0, 0.0
+
+
 # ================= JEPA 训练 =================
 def _train_jepa(
     agent: "TrinityAgent",

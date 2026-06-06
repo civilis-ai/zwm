@@ -54,10 +54,8 @@ _RELATION_HARMONY = {"我": 1.0, "兄弟": 0.9, "父母": 0.7,
 
 # 天地人三层
 _LAYERS = {0: "天", 1: "人", 2: "地"}
-
-# 关系和谐度 (以"我"为中心, 固定不变)
-_RELATION_HARMONY = {"我": 1.0, "兄弟": 0.9, "父母": 0.7,
-                     "子孙": 0.8, "妻财": 0.6, "官鬼": 0.3}
+_SPATIAL_PALACES = [1, 2, 3, 4, 6, 7, 8, 9]
+_TRINITY_TARGETS = [1, 2, 3, 4, 6, 7, 8, 9, 10, 11]
 
 
 @dataclass
@@ -161,6 +159,34 @@ class SelfState:
         rel = self.relation_to(target_palace)
         return _RELATION_HARMONY.get(rel, 0.5)
 
+    def to_luoshu_palace(self, target: int) -> int:
+        """Project a trinity exploration target into the 2D Luoshu grid.
+
+        Targets 10/11 are the vertical 天/地 axis above and below the
+        center self. The current EFE/MCTS planner is a planar Luoshu
+        scorer, so vertical targets are projected to the center palace
+        while the original target remains in ``palace_visits``.
+        """
+        if 1 <= target <= 9:
+            return target
+        if target in (10, 11):
+            return 5
+        raise ValueError(f"Unknown exploration target: {target!r}")
+
+    def next_luoshu_palace_to_explore(self) -> int:
+        """Planner-facing target: next trinity target projected to 1..9."""
+        return self.to_luoshu_palace(self.next_to_explore())
+
+    def next_spatial_to_explore(self) -> int:
+        """Planner-facing spatial target: next unvisited 洛书八方."""
+        unvisited = [p for p in _SPATIAL_PALACES if self.palace_visits.get(p, 0) == 0]
+        if unvisited:
+            return self._most_harmonic(unvisited)
+        counts = {p: self.palace_visits.get(p, 0) for p in _SPATIAL_PALACES}
+        min_count = min(counts.values())
+        candidates = [p for p, c in counts.items() if c == min_count]
+        return self._most_harmonic(candidates)
+
     @property
     def heaven_relation(self) -> str:
         """我与上(天)的关系."""
@@ -179,16 +205,17 @@ class SelfState:
     # ── 探索 ──
 
     def next_to_explore(self) -> int:
-        """我最该去的下一宫 (八方 + 上/下).
+        """我最该去的下一宫/层 (八方 + 上/下).
 
-        优先未访问的宫位, 在同等条件下选五行最和谐的。
+        10=上·天, 11=下·地 是三才立体语义目标。二维 planner
+        需要调用 ``next_luoshu_palace_to_explore()`` 或
+        ``to_luoshu_palace()`` 做投影, 不能在这里抹掉立体概念。
         """
-        all_dirs = [1, 2, 3, 4, 6, 7, 8, 9, 10, 11]  # 八方 + 上下
-        unvisited = [p for p in all_dirs if self.palace_visits.get(p, 0) == 0]
+        unvisited = [p for p in _TRINITY_TARGETS if self.palace_visits.get(p, 0) == 0]
         if unvisited:
             return self._most_harmonic(unvisited)
         # 全访问过 → 选去得最少的
-        counts = {p: self.palace_visits.get(p, 0) for p in all_dirs}
+        counts = {p: self.palace_visits.get(p, 0) for p in _TRINITY_TARGETS}
         min_count = min(counts.values())
         candidates = [p for p, c in counts.items() if c == min_count]
         return self._most_harmonic(candidates)
@@ -203,9 +230,8 @@ class SelfState:
         return best
 
     def record_visit(self, palace: int, layer: int = 1) -> None:
-        """记录一次宫位访问 (含上/下层)."""
+        """记录一次三才目标访问 (八方 + 上/下)."""
         if palace != 5:  # 不记录中宫(自己)
-            key = palace + layer * 100  # 0=天,1=人,2=地 → 区分不同层的访问
             self.palace_visits[palace] = self.palace_visits.get(palace, 0) + 1
 
     # ── 序列化 ──
