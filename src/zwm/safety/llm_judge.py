@@ -478,7 +478,7 @@ def make_auto_judge(
         _log.info("auto_judge: using OpenAI")
         return make_openai_judge(fail_open=fail_open)
     if fail_open:
-        _log.warning("auto_judge: no API key found, using no-op judge")
+        _log.debug("auto_judge: no API key found, using no-op judge")
         return _noop_judge
     raise RuntimeError(
         "No LLM API key for judge. Set DEEPSEEK_API_KEY, ANTHROPIC_API_KEY, "
