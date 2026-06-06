@@ -148,7 +148,21 @@ class HexagramFieldEncoder:
         return field.astype(np.float32)
 
     def encode_flat(self, sensor_data: dict | np.ndarray) -> np.ndarray:
-        """编码 → 384 维扁平向量 (向后兼容 106-dim 管道)."""
+        """编码 → 384 维扁平向量 (向后兼容 106-dim 管道).
+
+        .. deprecated::
+            ``encode_flat`` produces a 384-dim flat vector that is never
+            consumed by any downstream component.  Use ``encode()`` instead,
+            which returns the (64, 6) field representation used by the
+            FieldSquareGNN pipeline.
+        """
+        import warnings
+        warnings.warn(
+            "HexagramFieldEncoder.encode_flat() is deprecated: the 384-dim "
+            "flat vector is never consumed downstream. Use encode() instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         field = self.encode(sensor_data)
         return field.flatten()  # shape (384,)
 

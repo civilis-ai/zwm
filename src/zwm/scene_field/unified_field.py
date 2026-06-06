@@ -222,7 +222,18 @@ class UnifiedField:
 
         每个卦象的上下卦在后天八卦中有固定方位，产生
         方向性的"力"，影响洛书宫位间的能量流动。
+
+        .. deprecated::
+            ``bagua_directional_field`` is never called by any downstream
+            component.  It will be removed in a future release.
         """
+        import warnings
+        warnings.warn(
+            "UnifiedField.bagua_directional_field() is deprecated: "
+            "it is never consumed downstream and will be removed.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         upper = self.hexagram.upper_trigram
         lower = self.hexagram.lower_trigram
         field = {}

@@ -43,6 +43,13 @@ if TYPE_CHECKING:
 
 _log = logging.getLogger(__name__)
 
+# Tool pairs that can execute in parallel because they don't depend on
+# each other's output.  Used by the parallel tool execution optimisation.
+_INDEPENDENT_TOOL_PAIRS: frozenset[frozenset[str]] = frozenset({
+    frozenset({"memory_query", "time_phase"}),
+    frozenset({"harmony_calculator", "risk_assessor"}),
+})
+
 
 # ================= Tool Protocol =================
 
@@ -300,43 +307,62 @@ class ReActLoop:
         for step_idx in range(self._max_steps):
             # Step 1: Generate a thought about the current state.
             thought = self._generate_thought(context, result.steps)
-            step = ReActStep(thought=thought)
 
-            # Step 2: Select the most relevant untried tool.
-            tool_name = self._select_tool(context, used_tools)
-            if tool_name is None:
-                # All tools tried or none relevant — conclude.
-                step.observation = "No more relevant tools."
+            # Step 2: Select the most relevant untried tool(s).
+            # Check if the top 2 scored tools form an independent pair
+            # and their scores are close (within 20%) — if so, run both
+            # in parallel for a 2026 SOTA speed-up.
+            parallel_tools = self._select_parallel_tools(context, used_tools)
+            if parallel_tools is None:
+                # Single tool path (original logic)
+                tool_name = self._select_tool(context, used_tools)
+                if tool_name is None:
+                    step = ReActStep(thought=thought)
+                    step.observation = "No more relevant tools."
+                    result.steps.append(step)
+                    break
+
+                step = ReActStep(thought=thought)
+                step.tool_name = tool_name
+                step.tool_input = thought
+                used_tools.add(tool_name)
+
+                tool = self._tools[tool_name]
+                tool_result = tool.run(thought, context)
+                step.observation = tool_result.output
+                step.score = tool_result.score
+
+                if tool_result.data:
+                    context.update(tool_result.data)
+                result.tool_scores[tool_name] = tool_result.score
+
                 result.steps.append(step)
-                break
 
-            step.tool_name = tool_name
-            step.tool_input = thought  # use the thought as the query
-            used_tools.add(tool_name)
+                if tool_result.score is not None and tool_result.score < 0.4:
+                    step.observation += " [self-critique: low-score observation — reconsider]"
+            else:
+                # Parallel tool path — execute two independent tools concurrently.
+                step = ReActStep(thought=thought)
+                step.tool_name = "+".join(parallel_tools)
+                step.tool_input = thought
+                for tn in parallel_tools:
+                    used_tools.add(tn)
 
-            # Step 3: Invoke the tool.
-            tool = self._tools[tool_name]
-            tool_result = tool.run(thought, context)
-            step.observation = tool_result.output
-            step.score = tool_result.score
+                parallel_results = self._execute_tools_parallel(
+                    parallel_tools, thought, context,
+                )
+                observations: list[str] = []
+                for tr in parallel_results:
+                    if tr.data:
+                        context.update(tr.data)
+                    result.tool_scores[tr.tool_name] = tr.score
+                    observations.append(f"[{tr.tool_name}] {tr.output}")
+                    if tr.score is not None and tr.score < 0.4:
+                        observations[-1] += " [self-critique: low-score observation — reconsider]"
 
-            # Step 4: Update context with tool output.
-            if tool_result.data:
-                context.update(tool_result.data)
-            result.tool_scores[tool_name] = tool_result.score
-
-            result.steps.append(step)
-
-            # AUDIT-F4 (Reflexion): generate a verbal self-critique
-            # after each tool call.  The score-based template below is
-            # the 2026 SOTA pattern (Shinn et al. 2023, "Reflexion"):
-            # low-score observations are explicitly tagged so the
-            # next iteration can re-think the action.  The critique
-            # text is appended to the step but does not block — it's
-            # a textual signal consumed downstream by the LLM-based
-            # reflection synthesis (when one is plugged in).
-            if tool_result.score is not None and tool_result.score < 0.4:
-                step.observation += " [self-critique: low-score observation — reconsider]"
+                step.observation = " | ".join(observations)
+                step.score = max(tr.score for tr in parallel_results)
+                result.steps.append(step)
 
         # Final synthesis.
         result.final_thought = self._synthesize(result.steps)
@@ -444,6 +470,69 @@ class ReActLoop:
             return None
         scores.sort(key=lambda x: x[1], reverse=True)
         return scores[0][0]
+
+    def _select_parallel_tools(
+        self,
+        context: dict,
+        used_tools: set[str],
+    ) -> tuple[str, str] | None:
+        """Check whether the top-2 scored tools form an independent pair.
+
+        Returns the pair if both conditions hold:
+          1. The pair is in ``_INDEPENDENT_TOOL_PAIRS``
+          2. The second-highest score is within 20% of the highest
+        Otherwise returns ``None`` (fall back to single-tool path).
+        """
+        scores: list[tuple[str, float]] = []
+        for name in self._tools:
+            if name in used_tools:
+                continue
+            if name in self._tool_policy:
+                score = self._tool_policy[name](context)
+            else:
+                score = 0.5
+            scores.append((name, score))
+        if len(scores) < 2:
+            return None
+        scores.sort(key=lambda x: x[1], reverse=True)
+        top_name, top_score = scores[0]
+        second_name, second_score = scores[1]
+        # Score proximity check: second must be within 20% of top.
+        if top_score <= 0 or second_score < top_score * 0.8:
+            return None
+        pair = frozenset({top_name, second_name})
+        if pair in _INDEPENDENT_TOOL_PAIRS:
+            return (top_name, second_name)
+        return None
+
+    def _execute_tools_parallel(
+        self,
+        tool_names: tuple[str, str],
+        query: str,
+        context: dict,
+    ) -> list[ToolResult]:
+        """Execute two independent tools concurrently using ThreadPoolExecutor.
+
+        Uses ``max_workers=3`` to leave headroom for the main thread.
+        Each tool receives a *copy* of the context dict so that
+        side-effects from one tool don't race with the other.
+        """
+        results: list[ToolResult] = []
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            futures = {}
+            for name in tool_names:
+                tool = self._tools[name]
+                # Shallow-copy context so parallel writes don't collide.
+                ctx_copy = dict(context)
+                futures[pool.submit(tool.run, query, ctx_copy)] = name
+            for future in as_completed(futures):
+                try:
+                    tr = future.result(timeout=self._tool_timeout)
+                except Exception as exc:
+                    name = futures[future]
+                    tr = ToolResult(name, f"Parallel execution failed: {exc}", 0.0)
+                results.append(tr)
+        return results
 
     def _score_memory_query(self, context: dict) -> float:
         """Score memory_query tool relevance — higher when visits are low."""

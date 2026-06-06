@@ -136,6 +136,12 @@ class TrinityAgent:
             enabled=self.config.enable_constitution,
         )
 
+        # LLM-as-Judge safety layer — additional check alongside the
+        # constitutional guard.  Only created when API keys are
+        # available; otherwise ``None`` and the check is skipped.
+        self._llm_judge = None
+        self._init_safety()
+
         # ── "我" — 第一人称定位锚点 (必须在一切子系统之前) ──
         # 部署时设定日干, agent 的所有感知/预测/行动以此为中心
         self._init_self()
@@ -192,6 +198,33 @@ class TrinityAgent:
     def self_state(self) -> "SelfState":
         """P0 — agent 的"我"."""
         return self._self_state
+
+    def _init_safety(self) -> None:
+        """Initialise the LLM-as-Judge safety layer.
+
+        Creates an :class:`LLMJudgeRule` via :func:`make_auto_judge`
+        when at least one LLM API key is available.  The judge is
+        stored as ``self._llm_judge`` and used as an additional
+        safety check alongside the constitutional guard in
+        ``check_output``.
+        """
+        try:
+            from zwm.safety.llm_judge import LLMJudgeRule, make_auto_judge
+            from zwm.safety.constitution import Severity
+            judge_fn = make_auto_judge()
+            # make_auto_judge returns _noop_judge when no API key is found;
+            # only wire the rule when we got a real judge.
+            if judge_fn.__name__ != "_noop_judge":
+                self._llm_judge = LLMJudgeRule(
+                    name="llm-output-judge",
+                    judge_fn=judge_fn,
+                    severity=Severity.WARN,
+                )
+                _log.info("LLM judge safety layer initialised")
+            else:
+                _log.debug("No LLM API key found; LLM judge safety layer disabled")
+        except Exception as exc:
+            _log.debug("LLM judge init skipped: %s", exc)
 
     def _init_planning(self) -> None:
         """Stateless MCTS + MoE evaluator."""
@@ -786,14 +819,23 @@ class TrinityAgent:
         # P4-8 — OUTPUT GATE.  Validate the produced TickReport against
         # the constitution.  Block-severity failures raise here and
         # the caller (CLI / API / MCP) is expected to surface them.
-        self.constitution.check_output({
+        output_payload = {
             "h_current": report.h_current.normal_order,
             "h_next": report.h_next.normal_order,
             "top_mutation": report.top_mutation,
             "top_score": report.top_score,
             "reward": report.reward,
             "surprise": report.surprise,
-        })
+        }
+        self.constitution.check_output(output_payload)
+        # Additional LLM-judge safety check (when available).
+        if self._llm_judge is not None:
+            try:
+                verdict = self._llm_judge.check(output_payload)
+                if not verdict.passed:
+                    _log.warning("LLM judge rejected output: %s", verdict.reason)
+            except Exception as exc:
+                _log.warning("LLM judge check failed (fail-open): %s", exc)
         return report
 
     # ------------------------------------------------------------------

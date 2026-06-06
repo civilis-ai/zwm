@@ -48,14 +48,24 @@ class ZWMLocalAgent:
         print(f"║  ZWM 本地智能体 — 日{self._day_gan}·{'金木水火土'[{'甲':0,'丙':1,'戊':2,'庚':3,'壬':4}.get(self._day_gan,0)]} @中宫{'':<30s}║")
         print("╚══════════════════════════════════════════════════════════╝")
 
-        # 摄像头
+        # 摄像头 — Windows 需要 DSHOW 后端
         if self._use_camera:
-            self._cap = cv2.VideoCapture(0)
-            if not self._cap.isOpened():
-                print("⚠️  摄像头未找到, 使用模拟视觉")
+            for cam_idx in [0, 1]:
+                self._cap = cv2.VideoCapture(cam_idx, cv2.CAP_DSHOW)
+                if self._cap.isOpened():
+                    # 预热: 读一帧确保摄像头真的在工作
+                    ret, frame = self._cap.read()
+                    if ret and frame is not None and frame.size > 0:
+                        h, w = frame.shape[:2]
+                        print(f"📷 摄像头就绪 (index={cam_idx}, {w}x{h})")
+                        break
+                    self._cap.release()
+                    self._cap = None
+            if self._cap is None or not self._cap.isOpened():
+                print("⚠️  摄像头未找到 (尝试了 index 0,1)")
+                print("   检查: 相机是否被其他应用占用? 隐私设置允许访问?")
                 self._use_camera = False
-            else:
-                print("📷 摄像头就绪")
+                self._cap = None
 
         # 语音
         if self._use_voice:
@@ -175,79 +185,122 @@ class ZWMLocalAgent:
 
     # ── 存活循环 ──
 
-    def run(self, headless: bool = False):
-        """主循环.
+    def _render_display(self):
+        """渲染状态面板到 OpenCV 窗口."""
+        # 有摄像头画面则叠加, 没有则黑底
+        if self._last_frame is not None:
+            display = cv2.resize(self._last_frame, (448, 448))
+            h, w = 448, 448
+            for i in range(1, 3):
+                cv2.line(display, (w*i//3, 0), (w*i//3, h), (0,255,0), 1)
+                cv2.line(display, (0, h*i//3), (w, h*i//3), (0,255,0), 1)
+        else:
+            display = np.zeros((448, 448, 3), dtype=np.uint8)
 
-        headless=True: 纯文本模式 (SSH/无桌面)
-        headless=False: OpenCV窗口模式 (桌面)
-        GUI窗口独立于摄像头 — 没摄像头也能显示状态。
-        """
+        ss = self._engine.self_state
+        last = self._engine.history[-1] if self._engine.history else None
+
+        y = 25
+        cv2.putText(display, f"ZWM | {ss.day_gan}·{ss.self_element} | Center",
+                   (10, y), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0,255,0), 2)
+        y += 30
+        cv2.putText(display, f"N={ss.relation_to(1)} S={ss.relation_to(9)} E={ss.relation_to(3)} W={ss.relation_to(7)}",
+                   (10, y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0,255,255), 1)
+        y += 25
+        if self._last_hex_field is not None:
+            act = int((self._last_hex_field.mean(axis=1) > 0.5).sum())
+            cv2.putText(display, f"Active: {act}/64 hexagrams",
+                       (10, y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255,255,0), 1)
+            y += 25
+        if last:
+            cv2.putText(display, f"Tick {len(self._engine.history)} | {last.next_hexagram} | Gong {last.target_palace}",
+                       (10, y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200,200,200), 1)
+            y += 25
+            cv2.putText(display, f"JEPA={last.jepa_loss:.4f}",
+                       (10, y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200,200,200), 1)
+            y += 30
+            if last.agent_reply:
+                for line in self._wrap_text(last.agent_reply, 70):
+                    cv2.putText(display, line, (10, y), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0,255,0), 1)
+                    y += 18
+        cv2.putText(display, "[SPACE]=tick [T]=talk [1-9]=gong [Q]=quit",
+                   (10, 430), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (150,150,150), 1)
+        return display
+
+    @staticmethod
+    def _wrap_text(text: str, width: int) -> list:
+        """简单文本换行."""
+        lines = []
+        while len(text) > width:
+            split = width
+            while split > 0 and text[split] not in ' ,.;;:!?':
+                split -= 1
+            if split == 0:
+                split = width
+            lines.append(text[:split].strip())
+            text = text[split:].strip()
+        if text:
+            lines.append(text)
+        return lines
+
+    def _capture_frame(self):
+        """从摄像头捕获一帧."""
+        if not self._cap or not self._cap.isOpened():
+            return
+        ret, frame = self._cap.read()
+        if ret and frame is not None and frame.size > 0:
+            self._last_frame = cv2.resize(frame, (224, 224))
+            # 编码为卦象场
+            if self._last_frame is not None:
+                try:
+                    self._last_hex_field = self._vision.encode(self._last_frame)
+                except Exception:
+                    pass
+
+    def run(self, headless: bool = False):
+        """主循环."""
         self.start()
         has_gui = not headless
-        try:
-            if has_gui:
-                cv2.namedWindow("ZWM", cv2.WINDOW_NORMAL)
-                cv2.resizeWindow("ZWM", 448, 448)
-        except Exception:
-            has_gui = False
-            print("(GUI不可用, 文本模式)")
 
         if has_gui:
-            cv2.namedWindow("ZWM", cv2.WINDOW_NORMAL)
-            cv2.resizeWindow("ZWM", 448, 448)
+            try:
+                cv2.namedWindow("ZWM", cv2.WINDOW_NORMAL | cv2.WINDOW_GUI_NORMAL)
+                cv2.resizeWindow("ZWM", 500, 500)
+                # 立即渲染初始画面
+                display = self._render_display()
+                cv2.imshow("ZWM", display)
+                cv2.waitKey(1)
+            except Exception as e:
+                print(f"(GUI不可用: {e}, 文本模式)")
+                has_gui = False
 
         print("\n" + "="*56)
-        print("  按键: [SPACE]=OODA [T]=说话 [S]=状态 [1-9]=目标 [Q]=退出")
-        if not has_gui:
-            print("  (文本模式: 输入命令后回车)")
+        print("  [SPACE]=OODA [T]=对话 [1-9]=宫位 [S]=状态 [Q]=退出")
         print("="*56 + "\n")
 
         tick_count = 0
+        frame_counter = 0
+        key = 0
         while self._running:
+            # 每5帧读一次摄像头
+            frame_counter += 1
+            if has_gui and frame_counter % 5 == 0:
+                self._capture_frame()
+
             if has_gui:
-                # GUI模式 — 有摄像头显示画面, 没有则显示状态面板
-                if self._last_frame is not None:
-                    display = self._last_frame.copy()
-                    h, w = display.shape[:2]
-                    for i in range(1, 3):
-                        cv2.line(display, (w*i//3, 0), (w*i//3, h), (0,255,0), 1)
-                        cv2.line(display, (0, h*i//3), (w, h*i//3), (0,255,0), 1)
-                else:
-                    # 无摄像头: 黑底状态面板
-                    display = np.zeros((448, 448, 3), dtype=np.uint8)
-                # 状态覆盖
-                ss = self._engine.self_state
-                cv2.putText(display, f"ZWM {ss.day_gan}·{ss.self_element} @Center",
-                           (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0,255,0), 2)
-                cv2.putText(display, f"N:{ss.relation_to(1)} S:{ss.relation_to(9)} E:{ss.relation_to(3)} W:{ss.relation_to(7)}",
-                           (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0,255,255), 1)
-                hx = self._last_hex_field
-                if hx is not None:
-                    act = int((hx.mean(axis=1) > 0.5).sum())
-                    cv2.putText(display, f"Active hexagrams: {act}/64",
-                               (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255,255,0), 1)
-                last = self._engine.history[-1] if self._engine.history else None
-                if last:
-                    cv2.putText(display, f"Tick {len(self._engine.history)}  JEPA={last.jepa_loss:.4f}",
-                               (10, 120), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200,200,200), 1)
-                    cv2.putText(display, f"Hex: {last.next_hexagram}  Palace: {last.target_palace}",
-                               (10, 145), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200,200,200), 1)
-                if last and last.agent_reply:
-                    # 截断回复到窗口宽度
-                    reply = last.agent_reply[:80]
-                    cv2.putText(display, reply, (10, 175), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0,255,0), 1)
-                cv2.putText(display, "[SPACE]tick [T]talk [1-9]gong [S]status [Q]quit",
-                           (10, 430), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (150,150,150), 1)
+                display = self._render_display()
                 cv2.imshow("ZWM", display)
-                key = cv2.waitKey(100) & 0xFF
+                k = cv2.waitKey(30)
+                if k == -1:
+                    continue
+                key = k & 0xFF
             else:
-                # 文本模式
                 try:
                     cmd = input("ZWM> ").strip().lower()
                 except (EOFError, KeyboardInterrupt):
                     break
                 if not cmd:
-                    key = ord(' ')  # 空回车=OODA tick
+                    key = ord(' ')
                 elif cmd in ('q', 'quit', 'exit'):
                     key = ord('q')
                 elif cmd in ('s', 'status'):
@@ -257,52 +310,44 @@ class ZWMLocalAgent:
                 elif cmd in ('1','2','3','4','5','6','7','8','9'):
                     key = ord(cmd)
                 elif cmd == 'auto':
-                    # 自动连续运行
                     n = 10
                     print(f"  自动运行 {n} 步...")
                     for i in range(n):
                         result = self.tick()
-                        print(f"  [{tick_count+i+1}] →{result['action']:<6s} "
-                              f"宫{result['target']} JEPA={result['jepa']:.4f}")
+                        print(f"  [{tick_count+i+1}] {result['action']} g{result['target']} JEPA={result['jepa']:.4f}")
                     tick_count += n
                     continue
                 elif cmd == 'learn':
-                    print("  学习 20 步...")
                     losses = self._engine.learn(20)
-                    print(f"  JEPA: {losses[0]:.4f} → {losses[-1]:.4f}")
+                    print(f"  JEPA: {losses[0]:.4f} -> {losses[-1]:.4f}")
                     continue
                 elif cmd == 'help':
-                    print("  [回车]=tick [auto]=自动10步 [learn]=学习20步")
-                    print("  [1-9]=目标宫位 [t]=对话 [s]=状态 [q]=退出")
+                    print("  [回车]=tick [auto]=10步 [1-9]=宫 [t]=对话 [q]=退出")
                     continue
                 else:
-                    # 当作对话指令
                     key = ord('t')
 
-            # ── 处理按键 ──
+            # 处理按键
             if key == ord('q') or key == 27:
                 break
             elif key == ord(' '):
                 tick_count += 1
                 result = self.tick()
-                print(f"[{tick_count}] →{result['action']:<6s} "
-                      f"宫{result['target']} JEPA={result['jepa']:.4f}")
+                print(f"[{tick_count}] {result['action']} g{result['target']} JEPA={result['jepa']:.4f}")
             elif key == ord('t'):
-                if not has_gui:
-                    text = cmd if 'cmd' in dir() else input("  你说: ").strip()
-                else:
-                    text = input("  你说: ").strip()
-                if text and text not in ('t', 'talk'):
+                print("\n" + "="*50)
+                text = input("  You: ").strip()
+                print("="*50)
+                if text:
                     state = self._engine.execute(text)
-                    print(f"  → {state.agent_reply}")
+                    print(f"  ZWM: {state.agent_reply}")
             elif key == ord('s'):
-                print(self.status_panel())
+                print("\n" + self.status_panel())
             elif ord('1') <= key <= ord('9'):
                 palace = key - ord('0')
                 ss = self._engine.self_state
-                rel = ss.relation_to(palace)
-                state = self._engine.execute(f"去宫{palace}")
-                print(f"  宫{palace}({rel}) → {state.next_hexagram}")
+                state = self._engine.execute(f"探索宫位{palace}")
+                print(f"  G{palace}({ss.relation_to(palace)}) -> {state.next_hexagram}")
 
         self.stop()
 
