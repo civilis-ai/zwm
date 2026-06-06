@@ -111,27 +111,30 @@ def memory_priors(agent: "TrinityAgent", h_current: "Hexagram", k: int = 5) -> d
     return priors
 
 
-def _combined_priors(agent: "TrinityAgent", h_current: "Hexagram") -> list[int]:
-    """聚合 Hebbian + 情节 + Preferred-Prior 三路先验,去重后返回。
+def _combined_priors(agent: "TrinityAgent", h_current: "Hexagram") -> dict[int, float]:
+    """聚合 Hebbian + 情节 + Preferred-Prior 三路先验,返回带权重的先验。
+
+    Returns a ``{mask: weight}`` dict so the MCTS planner can use the
+    prior strength to bias search — masks with higher weight are
+    explored first and receive a UCT bonus.
 
     Preferred-Prior 是 EFE pragmatic 项的 softmax 分布 (见
     ``preferred_prior_distribution``),它将空间目标 (top-K 宫位)
     转换为动作 mask,与"我曾见过什么"互补。
     """
     cur = h_current.normal_order
-    masks: list[int] = []
+    priors: dict[int, float] = {}
 
     # Hebbian: high-association successor hexagrams -> the mask reaching them.
-    for h2, _strength in agent.hebbian.suggest_next(cur, top_k=5):
+    for h2, strength in agent.hebbian.suggest_next(cur, top_k=5):
         mask = (cur ^ h2) & 0b111111
         if 1 <= mask <= 63:
-            masks.append(mask)
+            priors[mask] = priors.get(mask, 0.0) + float(strength)
 
     # Episodic memory: masks that paid off from similar states.
     mem = memory_priors(agent, h_current)
-    masks.extend(
-        m for m, _w in sorted(mem.items(), key=lambda x: x[1], reverse=True)
-    )
+    for m, w in mem.items():
+        priors[m] = priors.get(m, 0.0) + float(w)
 
     # P0 — Preferred-prior distribution (EFE pragmatic softmax) of the
     # TOP-K hexagrams the agent wants to reach in the current grid.
@@ -147,20 +150,13 @@ def _combined_priors(agent: "TrinityAgent", h_current: "Hexagram") -> list[int]:
                 continue
             m = (cur ^ tgt) & 0b111111
             if 1 <= m <= 63:
-                masks.append(m)
+                priors[m] = priors.get(m, 0.0) + float(probs[tgt])
     except Exception as exc:
         # AUDIT-S3: prefer-prior failures used to vanish; now they
         # log at WARNING so an off-grid agent is observable.
         _log.warning("preferred_prior_distribution failed: %s", exc)
 
-    # De-duplicate, preserving priority order.
-    seen: set[int] = set()
-    ordered: list[int] = []
-    for m in masks:
-        if m not in seen:
-            seen.add(m)
-            ordered.append(m)
-    return ordered
+    return priors
 
 
 def _next_palace_to_explore(agent: "TrinityAgent", grid: LuoshuGrid | None = None) -> int:

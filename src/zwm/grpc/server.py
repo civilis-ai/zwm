@@ -22,6 +22,28 @@ from typing import Any, Callable
 
 import numpy as np
 
+# 条件导入 orjson (比 stdlib json 快 3-5x), 回退到 stdlib json
+try:
+    import orjson as _json_mod
+    _ORJSON_AVAILABLE = True
+except ImportError:
+    import json as _json_mod  # type: ignore[no-redef]
+    _ORJSON_AVAILABLE = False
+
+
+def _json_dumps(obj: Any) -> bytes:
+    """Serialize obj to JSON bytes. Uses orjson when available for speed."""
+    if _ORJSON_AVAILABLE:
+        return _json_mod.dumps(obj, option=_json_mod.OPT_SERIALIZE_NUMPY)  # type: ignore[attr-defined]
+    return _json_mod.dumps(obj, ensure_ascii=False).encode("utf-8")
+
+
+def _json_loads(data: bytes) -> Any:
+    """Deserialize JSON bytes to Python object."""
+    if _ORJSON_AVAILABLE:
+        return _json_mod.loads(data)
+    return _json_mod.loads(data.decode("utf-8"))
+
 _log = logging.getLogger(__name__)
 
 # 条件导入 grpcio
@@ -254,38 +276,34 @@ class _GenericHandler:
         self._servicer = servicer
 
     def handle_tick(self, request: bytes, context: Any) -> bytes:
-        import json
         try:
-            req_dict = json.loads(request.decode("utf-8"))
+            req_dict = _json_loads(request)
             req = TickRequest.from_dict(req_dict)
             resp = self._servicer.tick(req)
-            return json.dumps(resp.to_dict(), ensure_ascii=False).encode("utf-8")
+            return _json_dumps(resp.to_dict())
         except Exception as exc:
             context.set_code(grpc.StatusCode.INTERNAL)
             context.set_details(str(exc))
             return b"{}"
 
     def handle_stream_tick(self, request: bytes, context: Any) -> Any:
-        import json
         try:
-            req_list = json.loads(request.decode("utf-8"))
+            req_list = _json_loads(request)
             reqs = [TickRequest.from_dict(r) for r in req_list]
             for resp in self._servicer.stream_tick(reqs):
-                yield json.dumps(resp.to_dict(), ensure_ascii=False).encode("utf-8")
+                yield _json_dumps(resp.to_dict())
         except Exception as exc:
             context.set_code(grpc.StatusCode.INTERNAL)
             context.set_details(str(exc))
             return
 
     def handle_get_info(self, request: bytes, context: Any) -> bytes:
-        import json
         resp = self._servicer.get_info()
-        return json.dumps(resp, ensure_ascii=False).encode("utf-8")
+        return _json_dumps(resp)
 
     def handle_health_check(self, request: bytes, context: Any) -> bytes:
-        import json
         resp = {"status": "SERVING", "agent_ready": self._servicer.agent is not None}
-        return json.dumps(resp).encode("utf-8")
+        return _json_dumps(resp)
 
 
 def _make_method_handler(

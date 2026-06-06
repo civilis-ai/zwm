@@ -344,12 +344,20 @@ async def ws_tick(websocket):
     rl_key = f"tok:{expected[:8]}" if authenticated else f"ip:{client_ip}"
     rl = RateLimiterRegistry.instance()
 
-    # P2-1: Create an AsyncAgent wrapper for native async OODA.
-    # This avoids the thread-pool overhead of ``run_in_executor``.
+    # P1: 复用全局 agent 实例, 不再每个连接创建新的 AsyncAgent.
+    # 若全局 agent 未初始化, 回退到创建临时实例。
+    try:
+        global_agent = get_agent()
+    except RuntimeError:
+        global_agent = None
+
     from zwm.planner.async_agent import AsyncAgent, AsyncTickRequest
     async_agent: AsyncAgent | None = None
     try:
-        async_agent = AsyncAgent(db_path="zwm_ws.db")
+        if global_agent is not None:
+            async_agent = AsyncAgent(agent=global_agent, owns_agent=False)
+        else:
+            async_agent = AsyncAgent(db_path="zwm_ws.db")
         await async_agent.start()
         try:
             async for raw in websocket.iter_text():

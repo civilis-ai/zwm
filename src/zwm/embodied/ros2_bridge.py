@@ -221,6 +221,51 @@ class SensorConverter:
                 return None
 
     @staticmethod
+    def adapt_for_agent(sensor_data: dict[str, float]) -> dict[str, float]:
+        """将 ROS2 传感器键映射为 RuleBasedEncoder 期望的键。
+
+        RuleBasedEncoder 要求: temperature, terrain, social_proximity,
+        resource_level, momentum, overall_favorability。
+
+        映射规则:
+          - 天_左/中/右 → temperature (三者均值)
+          - 地_heading → terrain (heading-based, 0=flat, 1=steep)
+          - 地_speed → momentum (speed-based)
+          - 人_accel → social_proximity (加速度幅值的逆, 高加速=低接近度)
+          - 人_gyro → resource_level (陀螺仪幅值)
+          - overall_favorability → 天_中 (中间激光读数作为整体有利度代理)
+        """
+        adapted: dict[str, float] = {}
+
+        # temperature: average of 天_左/中/右
+        sky_keys = ["天_左", "天_中", "天_右"]
+        sky_vals = [sensor_data[k] for k in sky_keys if k in sensor_data]
+        if sky_vals:
+            adapted["temperature"] = float(np.mean(sky_vals)) * 40.0  # scale to ~Celsius range
+
+        # terrain: heading-based (0=flat, 1=steep)
+        if "地_heading" in sensor_data:
+            adapted["terrain"] = float(np.clip(sensor_data["地_heading"], 0, 1))
+
+        # social_proximity: inverse of accel magnitude
+        if "人_accel" in sensor_data:
+            adapted["social_proximity"] = float(np.clip(1.0 - sensor_data["人_accel"], 0, 1))
+
+        # resource_level: gyro-based
+        if "人_gyro" in sensor_data:
+            adapted["resource_level"] = float(np.clip(1.0 - sensor_data["人_gyro"], 0, 1))
+
+        # momentum: speed-based
+        if "地_speed" in sensor_data:
+            adapted["momentum"] = float(np.clip(sensor_data["地_speed"], 0, 1))
+
+        # overall_favorability: center sky reading as proxy
+        if "天_中" in sensor_data:
+            adapted["overall_favorability"] = float(np.clip(sensor_data["天_中"], 0, 1))
+
+        return adapted
+
+    @staticmethod
     def merge_sensors(
         laser: LaserScan | None = None,
         odom: Odometry | None = None,
@@ -335,8 +380,9 @@ class ROS2Bridge:
         )
         if not sensor_data:
             return None
+        adapted_data = SensorConverter.adapt_for_agent(sensor_data)
         report = self._agent.observe_predict_evaluate_act(
-            sensor_data=sensor_data,
+            sensor_data=adapted_data,
             vision_features=vision,
         )
         linear, angular = ActionMapper.hexagram_to_twist(
@@ -398,7 +444,8 @@ class ROS2Bridge:
                     imu=self._latest_imu,
                 )
             if sensor_data and self._agent is not None:
-                self._on_sensor_update(sensor_data, sensor_warnings, step, vision)
+                adapted_data = SensorConverter.adapt_for_agent(sensor_data)
+                self._on_sensor_update(adapted_data, sensor_warnings, step, vision)
                 consecutive_errors = self._consecutive_errors
             elif sensor_warnings:
                 _log.info(
@@ -650,7 +697,8 @@ class ROS2Node:
             imu=self._latest_imu,
         )
         if sensor_data:
-            self._bridge._on_sensor_update(sensor_data, sensor_warnings)
+            adapted_data = SensorConverter.adapt_for_agent(sensor_data)
+            self._bridge._on_sensor_update(adapted_data, sensor_warnings)
 
     def spin(self, max_steps: int | None = None) -> None:
         """Block on rclpy.spin() — real sensor callbacks drive OODA.

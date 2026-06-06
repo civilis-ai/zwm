@@ -36,7 +36,9 @@ from zwm.core.hexagram import hexagram_from_bits
 class TestUnifiedFieldDeduplication:
     """The 6-dim hexagram binary string was dropped from to_tensor().
     P3: 4 calendar context phases (年/月/日/时) → 25 dims.
-    P3-C: 4 cosmic phases (元/会/运/世) → 29 dims."""
+    P3-C: 4 cosmic phases (元/会/运/世) → 29 dims.
+    UF-1: six-relations now frequency over 9 palaces (not self-only one-hot).
+    UF-2: 值年卦 + 节气 added; calendar compressed 4→2 dims → 29 dims."""
 
     def test_to_tensor_is_29_dim(self):
         h = hexagram_from_bits(0b101010)
@@ -66,8 +68,8 @@ class TestUnifiedFieldDeduplication:
             },
         )
         t = world.to_tensor()
-        # The last 4 dims are cosmic phases normalized to [0, 1]
-        cosmic_dims = t[-4:]
+        # Cosmic phases are at dims 23-26 (before 值年卦 and 节气)
+        cosmic_dims = t[-6:-2]
         # 1.0 normalized to [0, 1] is 1.0 / (2π) ≈ 0.159
         expected = 1.0 / (2 * 3.141592653589793)
         for v in cosmic_dims:

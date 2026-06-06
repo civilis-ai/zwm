@@ -89,7 +89,7 @@ class TrinityPlanner:
         target_palace: int | None = None,
         day_gan: str | None = None,
         preference_weights: dict[str, float] | None = None,
-        mask_priors: list[int] | None = None,
+        mask_priors: dict[int, float] | list[int] | None = None,
         palace_visit_counts: dict[int, int] | None = None,
         intrinsic_fn: Callable[[Hexagram], float] | None = None,
         beta_curiosity: float | None = None,
@@ -176,7 +176,7 @@ class TrinityPlanner:
         time_phase: float,
         target_palace: int | None,
         day_gan: str | None,
-        mask_priors: list[int] | None = None,
+        mask_priors: dict[int, float] | list[int] | None = None,
         intrinsic_fn=None,
         value_fn=None,
         particle_filter=None,
@@ -217,28 +217,41 @@ class TrinityPlanner:
     def _ordered_masks(
         self,
         h_current: Hexagram,
-        mask_priors: list[int] | None,
+        mask_priors: dict[int, float] | list[int] | None,
     ) -> list[int]:
         """Build the untried-mask list so expansion explores best-first.
 
         ``untried_masks`` is consumed via ``.pop()`` (tail first), so the
         highest-priority mask must sit at the tail. Priority is:
-          1. externally supplied priors, in the order given (Hebbian/memory),
+          1. externally supplied priors, ordered by weight (highest first),
           2. diffusion-sampled mutations (when DiffusionSampler is trained),
           3. then the Langevin score surface, best first.
+
+        When ``mask_priors`` is a ``dict[int, float]``, the weights are
+        used to sort priors — higher weight means higher priority.
+        When it is a plain ``list[int]``, all priors are treated equally
+        (backward compat).
         """
         ranked = self._sampler.top_k_mutations(h_current, k=63)  # desc by score
         langevin_desc = [mask for _h, mask, _score in ranked]
 
-        # De-duplicate priors, preserving caller priority order.
-        priors: list[int] = []
-        seen: set[int] = set()
-        for m in (mask_priors or []):
-            if 1 <= m <= 63 and m not in seen:
-                seen.add(m)
-                priors.append(m)
+        # Normalise mask_priors into a weight dict.
+        prior_weights: dict[int, float] = {}
+        if isinstance(mask_priors, dict):
+            for m, w in mask_priors.items():
+                if 1 <= m <= 63:
+                    prior_weights[m] = float(w)
+        elif mask_priors is not None:
+            for m in mask_priors:
+                if 1 <= m <= 63:
+                    prior_weights[m] = 1.0
+
+        # Sort priors by weight descending so the strongest prior is
+        # popped first (placed at the tail of untried_masks).
+        priors = sorted(prior_weights.keys(), key=lambda m: prior_weights[m])
 
         # DiffusionSampler trained samples — insert before Langevin masks.
+        seen: set[int] = set(prior_weights.keys())
         diffusion_masks: list[int] = []
         if isinstance(self._sampler, DiffusionSampler) and self._sampler._trained:
             try:
@@ -254,12 +267,12 @@ class TrinityPlanner:
         non_prior_desc = [m for m in langevin_desc if m not in seen]
 
         # Tail = highest priority. Lay down worst Langevin first, then diffusion
-        # masks, then priors in reverse so priors[0] (top Hebbian/memory pick)
-        # is the very last element and is therefore popped first.
+        # masks, then priors (already sorted by weight ascending, so the
+        # highest-weight prior is at the tail and popped first).
         return (
             list(reversed(non_prior_desc))
             + list(reversed(diffusion_masks))
-            + list(reversed(priors))
+            + priors  # ascending weight → highest at tail
         )
 
     def reinforce_expert(
@@ -306,7 +319,7 @@ class TrinityPlanner:
         self,
         node: _MCTSNode,
         h_current: Hexagram,
-        mask_priors: list[int] | None = None,
+        mask_priors: dict[int, float] | list[int] | None = None,
     ) -> _MCTSNode:
         if not node.untried_masks:
             return node
@@ -319,9 +332,19 @@ class TrinityPlanner:
         # search depth, not just the root expansion.
         if mask_priors:
             seen = {mask}
-            priors = [m for m in mask_priors if 1 <= m <= 63 and m not in seen]
-            non_prior = [m for m in range(1, 64) if m not in priors and m != mask]
-            child.untried_masks = list(reversed(non_prior)) + list(reversed(priors))
+            # Normalise to weight dict for consistent ordering.
+            prior_weights: dict[int, float] = {}
+            if isinstance(mask_priors, dict):
+                for m, w in mask_priors.items():
+                    if 1 <= m <= 63 and m not in seen:
+                        prior_weights[m] = float(w)
+            else:
+                for m in mask_priors:
+                    if 1 <= m <= 63 and m not in seen:
+                        prior_weights[m] = 1.0
+            priors = sorted(prior_weights.keys(), key=lambda m: prior_weights[m])
+            non_prior = [m for m in range(1, 64) if m not in prior_weights and m != mask]
+            child.untried_masks = list(reversed(non_prior)) + priors
         else:
             child.untried_masks = [m for m in range(1, 64) if m != mask]
         node.children[mask] = child

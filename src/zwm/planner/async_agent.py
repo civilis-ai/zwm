@@ -87,7 +87,11 @@ class AsyncAgent:
         await self.close()
 
     async def start(self) -> None:
-        """在后台线程构造 agent (torch 初始化可能耗时)。"""
+        """在后台线程构造 agent (torch 初始化可能耗时)。
+
+        若传入已有 agent 则跳过构造 (P1 — WebSocket 复用全局实例)。"""
+        if self._agent is not None:
+            return  # already have an agent (external or already started)
         loop = asyncio.get_running_loop()
         self._agent = await loop.run_in_executor(self._executor, self._build_agent)
 
@@ -101,7 +105,7 @@ class AsyncAgent:
         )
 
     async def close(self) -> None:
-        """优雅关闭: 停止背景循环 → 关闭 agent → 关闭线程池。"""
+        """优雅关闭: 停止背景循环 → 关闭 agent (仅自有的) → 关闭线程池。"""
         if self._loop_task is not None:
             self._loop_task.cancel()
             try:
@@ -109,7 +113,7 @@ class AsyncAgent:
             except asyncio.CancelledError:
                 pass
             self._loop_task = None
-        if self._agent is not None:
+        if self._agent is not None and self._owns_agent:
             loop = asyncio.get_running_loop()
             await loop.run_in_executor(self._executor, self._agent.close)
             self._agent = None

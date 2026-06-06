@@ -262,6 +262,25 @@ class OnlineLearner:
             )
         return self.preference_weights
 
+    def dpo_router_step(
+        self,
+        router,
+        chosen_experts: list[str],
+        rejected_experts: list[str],
+        lr: float = 0.01,
+    ) -> None:
+        """Apply DPO gradient signal to the MoE router's gating weights.
+
+        Connects the DPO preference alignment pipeline to the MoE
+        router, ensuring that expert selection aligns with learned
+        preferences.  Adjusts the router's gate biases to favor
+        chosen experts over rejected ones.
+
+        Should be called after ``dpo_update()`` or ``dpo_step()`` when
+        the MoE router is available.
+        """
+        apply_dpo_to_router(router, chosen_experts, rejected_experts, lr)
+
     @property
     def reward_baseline(self) -> float:
         """Return the global reward baseline (EMA over recent rewards)."""
@@ -371,6 +390,55 @@ def dpo_update(
             preference_weights[k] /= total_w
 
     return preference_weights
+
+
+# ------------------------------------------------------------------
+# DPO → MoE router gradient propagation
+# ------------------------------------------------------------------
+def apply_dpo_to_router(
+    router,
+    chosen_experts: list[str],
+    rejected_experts: list[str],
+    lr: float = 0.01,
+) -> None:
+    """Adjust the MoE router's gate biases to favor chosen experts over rejected ones.
+
+    After computing the DPO loss on preference_weights, this function
+    propagates the gradient signal to the MoE router's gating network.
+    For each chosen expert, its gate bias is increased by ``lr``; for
+    each rejected expert, its gate bias is decreased by ``lr``.  This
+    is a simple but effective approach that directly shifts the router's
+    prior toward preferred experts.
+
+    Supports both ``MoERouter`` (6-expert legacy) and
+    ``FineGrainedSparseMoE`` (64-expert + shared) router types.
+    """
+    import torch
+
+    # Determine the gate module and expert name list based on router type.
+    if hasattr(router, "gate") and hasattr(router.gate, "bias"):
+        # MoERouter: gate is nn.Linear with bias
+        gate = router.gate
+        expert_names = [
+            "time", "space", "social",
+            "element", "risk", "narrative",
+        ]
+    elif hasattr(router, "_gate") and hasattr(router._gate, "bias"):
+        # FineGrainedSparseMoE: _gate is nn.Linear with bias
+        gate = router._gate
+        expert_names = list(router.expert_names)
+    else:
+        return  # no adjustable gate bias found
+
+    name_to_idx = {name: i for i, name in enumerate(expert_names)}
+
+    with torch.no_grad():
+        for name in chosen_experts:
+            if name in name_to_idx:
+                gate.bias[name_to_idx[name]] += lr
+        for name in rejected_experts:
+            if name in name_to_idx:
+                gate.bias[name_to_idx[name]] -= lr
 
 
 # ------------------------------------------------------------------

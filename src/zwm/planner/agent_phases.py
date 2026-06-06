@@ -302,20 +302,13 @@ def _evaluate(
         except Exception as exc:
             _log.debug("ReAct loop failed: %s", exc)
 
-    # Blend ReAct bonus into mask_priors.
+    # Blend ReAct bonus into mask_priors (now a dict[int, float]).
     if np.any(react_bonus != 0) and mask_priors:
-        # Convert mask_priors list → dense 64-dim array for blending.
-        dense = np.zeros(64, dtype=np.float32)
-        for m in mask_priors:
+        for m in list(mask_priors.keys()):
             if 1 <= m <= 63:
-                dense[m] = 1.0
-        dense = dense + react_bonus
-        # Re-normalise.
-        total = dense.sum()
-        if total > 0:
-            dense = dense / total
-        # Convert back to list of mask indices (non-zero entries).
-        mask_priors = [int(i) for i in np.where(dense > 0.001)[0]]
+                mask_priors[m] = mask_priors[m] + float(react_bonus[m])
+        # Remove near-zero or negative priors.
+        mask_priors = {m: w for m, w in mask_priors.items() if w > 0.001}
 
     # P0-dead-output: consume _last_topology_path as spatial exploration
     # prior.  The topology walk from the previous ACT phase describes
@@ -341,7 +334,7 @@ def _evaluate(
                     child_pos = (child.luoshu_number - 1) % 9
                     for m in range(1, 64):
                         if (m >> (child_pos // 3 * 3)) & 0b111 == (child_pos % 3 + 1):
-                            react_bonus[m] += 0.02
+                            mask_priors[m] = mask_priors.get(m, 0.0) + 0.02
         except Exception as exc:
             _log.debug("Topology-guided exploration bonus failed: %s", exc)
 
@@ -358,8 +351,7 @@ def _evaluate(
             # hexagram via VSA encoding — higher VSA similarity means
             # the mask leads to a state that resonates with the prior
             # sensory context.
-            boosted: dict[int, float] = {}
-            for m in mask_priors:
+            for m in list(mask_priors.keys()):
                 h_mut = h_current.mutate(m)
                 vsa = agent.vsa.encode_hexagram(h_mut.normal_order)
                 # Cosine similarity between VSA vector and multimodal embedding
@@ -368,13 +360,7 @@ def _evaluate(
                     sim = float(np.dot(vsa, mm_emb) / (
                         np.linalg.norm(vsa) * np.linalg.norm(mm_emb) + 1e-8
                     ))
-                    boosted[m] = 0.05 * sim
-            # Convert boosted masks back into a sorted list.
-            mask_priors = sorted(
-                set(mask_priors),
-                key=lambda m: boosted.get(m, 0.0),
-                reverse=True,
-            )
+                    mask_priors[m] += 0.05 * sim
         except Exception as exc:
             _log.debug("Multimodal prior consumption failed: %s", exc)
 

@@ -258,6 +258,17 @@ def _update_preferences(
                 beta=0.1,
                 learning_rate=0.005,
             )
+            # Propagate DPO signal to the MoE router's gate biases
+            # so expert selection aligns with learned preferences.
+            try:
+                agent.learner.dpo_router_step(
+                    agent.planner._moe.router,
+                    chosen_experts=chosen,
+                    rejected_experts=rejected,
+                    lr=0.01,
+                )
+            except Exception as exc:
+                _log.debug("DPO router step failed: %s", exc)
 
     # GRPO — Group Relative Policy Optimization (DeepSeek-V3, 2026).
     # Every 8 ticks, evaluate the *group* of recent expert selections
@@ -410,7 +421,7 @@ def _gae_flush(agent: "TrinityAgent", result: "PlanResult") -> None:
 def _dreamer_imagine(
     agent: "TrinityAgent",
     z_start: np.ndarray,
-    horizon: int = 5,
+    horizon: int = 15,
     gamma: float = 0.99,
 ) -> list[tuple[np.ndarray, float]]:
     """DreamerV3-style imagined rollout from a latent state.
@@ -422,20 +433,34 @@ def _dreamer_imagine(
     TD-MPC2 and gives 2-5× sample efficiency over pure on-policy
     learning.
 
+    Uses a simplified RSSM (Recurrent State Space Model) via a
+    running-average hidden state ``h`` that carries temporal context
+    across imagination steps: ``h_{t+1} = 0.9 * h_t + 0.1 * z_pred``.
+    The imagined next latent incorporates this recurrent state:
+    ``z_{t+1} = predictor(z_t + h_t)`` instead of ``predictor(z_t)``.
+    This captures temporal dependencies without introducing new
+    parameters, matching the DreamerV3 standard horizon of 15 steps.
+
     Returns a list of (z_imagined, reward_imagined) pairs.  The
     caller (``_dreamer_replay``) feeds these into the value head
     and JEPA as additional training signal.
     """
     trajectory: list[tuple[np.ndarray, float]] = []
     z = z_start.copy()
+    h = np.zeros_like(z_start)  # simplified RSSM hidden state
     for _ in range(horizon):
-        # Imagine next latent via JEPA (no action conditioning for
-        # the default path; action-conditioned imagination uses
-        # ``jepa.predict(z, mask=action)`` when available).
-        z_next = agent.jepa.predict(z)
+        # Simplified RSSM: incorporate recurrent hidden state h into
+        # the prediction input.  h carries a running average of past
+        # predictions, providing temporal context without new parameters.
+        z_input = z + h
+        z_next = agent.jepa.predict(z_input)
         if isinstance(z_next, dict):
             z_next = z_next["short"]
         z_next = np.asarray(z_next, dtype=np.float32)
+
+        # Update hidden state as running average (simplified RSSM):
+        # h_{t+1} = 0.9 * h_t + 0.1 * z_pred
+        h = 0.9 * h + 0.1 * z_next
 
         # Imagined reward from the value head V(z).
         r = 0.0
@@ -460,7 +485,7 @@ def _dreamer_imagine(
 def _dreamer_replay(
     agent: "TrinityAgent",
     z_world: np.ndarray,
-    horizon: int = 5,
+    horizon: int = 15,
 ) -> dict[str, float]:
     """Train the value head on imagined DreamerV3 rollouts.
 

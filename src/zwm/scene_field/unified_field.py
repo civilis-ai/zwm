@@ -158,20 +158,31 @@ class UnifiedField:
         Keeping it here would just double-count the hexagram identity
         and waste JEPA input capacity.
 
-        P3: 4 calendar context phases (年/月/日/时) are now included so the
+        P3: calendar context phases (年/月/日/时) are included so the
         world model can distinguish temporal contexts beyond the single
         time_phase scalar.  P3-C: 4 cosmic phases (元/会/运/世) — the
         129600/10800/360/30-year traditional cycles — provide
         civilization-scale context the world model can latch onto.
+
+        UF-1: six-relations encoding now covers ALL 9 palaces (frequency
+        vector) instead of only the self-position one-hot, so all palaces'
+        六亲 information reaches the world model.
+
+        UF-2: 值年卦 and 节气 signals from calendar_context are now
+        consumed instead of silently discarded.  Calendar phases are
+        compressed from 4 dims (年/月/日/时) to 2 dims (year+month,
+        day+hour) to free 2 dims.
 
         Tensor breakdown:
 
           * 地: time_phase + grid self position              (2)
           * 地: Luoshu 9-palace field                       (9)
           * 地: 五行 (5 elements) weight                     (5)
-          * 人: 六亲 one-hot over 5 roles                    (5)
-          * 天: calendar context phases (年/月/日/时)        (4)
+          * 人: 六亲 frequency over 9 palaces                (5)
+          * 天: calendar phases (year+month, day+hour)       (2)
           * 天: cosmic phases (元/会/运/世)                  (4)
+          * 天: 值年卦 (hexagram normal_order / 64)          (1)
+          * 天: 节气 (solar_term index / 24)                 (1)
                                                     ----------------
                                                     29 dims total
         """
@@ -183,21 +194,27 @@ class UnifiedField:
         tensor.extend(self.luoshu_field.get(p, 0.0) for p in range(1, 10))
         # 地: 五行权重 (5维)
         tensor.extend(self.element_profile.get(e, 0.0) for e in ["金", "木", "水", "火", "土"])
-        # 人: 六亲关系 (5维独热) — 每宫的六亲角色编码
+        # 人: 六亲关系 (5维频率) — 所有9宫的六亲角色分布
         for role in _LIUQIN_ORDER:
-            # 自身宫位的六亲角色独热
-            tensor.append(1.0 if self.six_relations.get(self.grid.self_position) == role else 0.0)
-        # 天: 日历上下文相位 (4维) — 年/月/日/时
-        for key in ("年", "月", "日", "时"):
-            val = self.calendar_context.get(key, 0.0)
-            # Normalize [0, 2π] → [0, 1]
-            tensor.append((val % (2 * math.pi)) / (2 * math.pi))
+            count = sum(1 for pos in range(9) if self.six_relations.get(pos) == role)
+            tensor.append(count / 9.0)
+        # 天: 日历上下文相位 (2维) — 年+月 / 日+时 压缩
+        year_val = self.calendar_context.get("年", 0.0)
+        month_val = self.calendar_context.get("月", 0.0)
+        day_val = self.calendar_context.get("日", 0.0)
+        hour_val = self.calendar_context.get("时", 0.0)
+        tensor.append(((year_val + month_val) % (2 * math.pi)) / (2 * math.pi))
+        tensor.append(((day_val + hour_val) % (2 * math.pi)) / (2 * math.pi))
         # 天: 宇宙相 (4维) — 元/会/运/世 129600/10800/360/30 年大周期
-        # P3-C: 之前 cosmic_phases() 在 calendar.py 中计算但未进入张量,
-        # 导致宇宙尺度的语境信息被世界模型忽略。现已接通。
         for key in ("元", "会", "运", "世"):
             val = self.calendar_context.get(key, 0.0)
             tensor.append((val % (2 * math.pi)) / (2 * math.pi))
+        # 天: 值年卦 (1维) — 64卦圆图位置
+        zhi_nian_gua_val = self.calendar_context.get("值年卦", 0.0)
+        tensor.append((zhi_nian_gua_val % (2 * math.pi)) / (2 * math.pi))
+        # 天: 节气 (1维) — 24节气相位
+        jie_qi_val = self.calendar_context.get("节气", 0.0)
+        tensor.append((jie_qi_val % (2 * math.pi)) / (2 * math.pi))
         return tensor
 
     def bagua_directional_field(self) -> dict[str, float]:

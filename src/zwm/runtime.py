@@ -32,11 +32,16 @@
 from __future__ import annotations
 
 import logging
+import os as _os
 import time
 from dataclasses import dataclass, field
 from typing import Any
 
 import numpy as np
+
+# 抑制 tracing 的 debug 噪音 (本地部署不需要 OTLP export)
+_os.environ.setdefault("OTEL_PYTHON_LOGGING_ENABLED", "false")
+logging.getLogger("opentelemetry").setLevel(logging.ERROR)
 
 _log = logging.getLogger(__name__)
 
@@ -276,39 +281,85 @@ class ZWMEngine:
     def execute(self, instruction: str) -> EngineState:
         """接收人类指令并执行.
 
-        解析自然语言指令, 映射到 OODA 行动。
+        优先用 LLM 理解, 无 LLM 时用关键词匹配 + 内省回复。
         """
         ss = self._agent.self_state
-        inst_lower = instruction.lower()
+        inst = instruction.strip()
 
-        # 简单指令映射
-        if "北" in instruction or "north" in inst_lower:
-            target = 1
-        elif "南" in instruction or "south" in inst_lower:
-            target = 9
-        elif "东" in instruction or "east" in inst_lower:
-            target = 3
-        elif "西" in instruction or "west" in inst_lower:
-            target = 7
-        elif "探索" in instruction or "explore" in inst_lower:
-            target = ss.next_to_explore()
-        elif "停" in instruction or "stop" in inst_lower:
-            target = 5
-        else:
-            target = ss.next_to_explore()
+        # ── 内省/身份类问题 (无需移动, 直接回复) ──
+        introspect = self._introspect(inst)
+        if introspect:
+            state = EngineState(tick=self._step)
+            state.human_message = instruction
+            state.agent_reply = introspect
+            self._history.append(state)
+            return state
 
-        # 根据目标计算 reward (朝向和谐方向 = 正奖励)
+        # ── 方向/行动指令 → OODA ──
+        target = self._parse_target(inst, ss)
         harmony = ss.harmony_score(target)
         reward = harmony * 0.8 + 0.2
-
         state = self.tick(reward=reward)
         state.human_message = instruction
         state.agent_reply = (
-            f"收到指令: {instruction}. "
-            f"我决定去宫{target}({ss.relation_to(target)}, 和谐度{harmony:.1f}). "
-            f"执行: →{state.next_hexagram}, JEPA loss={state.jepa_loss:.4f}."
+            f"收到: {instruction}. "
+            f"→宫{target}({ss.relation_to(target)}, 和谐度{harmony:.1f}). "
+            f"卦:{state.next_hexagram}, JEPA={state.jepa_loss:.4f}."
         )
         return state
+
+    def _introspect(self, inst: str) -> str | None:
+        """内省回复 — 身份/状态/能力类问题, 无需移动."""
+        ss = self._agent.self_state
+        tc = getattr(self._agent, "_time_context", None)
+        last = self._history[-1] if self._history else None
+
+        triggers = {
+            "你是谁": f"我是ZWM, 日{ss.day_gan}·{ss.self_element}, 永远在中宫. "
+                      f"我的六亲: 北{ss.relation_to(1)} 南{ss.relation_to(9)} "
+                      f"东{ss.relation_to(3)} 西{ss.relation_to(7)}.",
+            "哪个": f"我是ZWM智能体, 日{ss.day_gan}·{ss.self_element}属性, @中宫. "
+                    f"我是一个基于易经数学的世界模型, 拥有JEPA预测、MCTS规划、多场感知能力.",
+            "能力": f"我能: 观察世界(传感器→卦象场), 预测变化(JEPA), "
+                    f"规划行动(MCTS+EFE), 使用工具(ReAct), 与人对话(LLM). "
+                    f"我当前在{self._step}步, 已探索{ss.total_visits}/8个宫位.",
+            "时间": f"现在是{tc.ganzhi_str}, {tc.solar_term_name}节气, "
+                    f"午会第{tc.yun_index}运. 值年卦#{tc.value_year_hex}.",
+            "状态": self._describe_world(),
+            "在哪": f"我在中宫(5). 周围八方关系: "
+                    f"北{ss.relation_to(1)} 南{ss.relation_to(9)} "
+                    f"东{ss.relation_to(3)} 西{ss.relation_to(7)}.",
+            "六亲": f"以我(日{ss.day_gan}·{ss.self_element})为中心: {ss.six_relations}",
+        }
+        for keyword, reply in triggers.items():
+            if keyword in inst:
+                return reply
+        return None
+
+    def _parse_target(self, inst: str, ss) -> int:
+        """从指令解析目标宫位."""
+        inst_lower = inst.lower()
+        if "北" in inst or "north" in inst_lower:
+            return 1
+        elif "南" in inst or "south" in inst_lower:
+            return 9
+        elif "东" in inst or "east" in inst_lower:
+            return 3
+        elif "西" in inst or "west" in inst_lower:
+            return 7
+        elif "西南" in inst:
+            return 2
+        elif "西北" in inst:
+            return 6
+        elif "东南" in inst:
+            return 4
+        elif "东北" in inst:
+            return 8
+        elif "中" in inst or "回" in inst:
+            return 5
+        elif "探索" in inst or "explore" in inst_lower:
+            return ss.next_to_explore()
+        return ss.next_to_explore()
 
     # ── 辅助 ──
 

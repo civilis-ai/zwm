@@ -10,6 +10,7 @@
   * A2AMessage         — 六爻编码消息 (VSA 向量 + 元数据)
   * ConsensusResult    — 多智能体共识结果 (加权投票)
   * A2ACoordinator     — 协调器 (注册、路由、共识)
+  * TaskState / A2ATask — 任务生命周期 (submitted→working→completed/failed)
 
 用法:
   coord = A2ACoordinator()
@@ -20,6 +21,7 @@
 from __future__ import annotations
 
 import asyncio
+import enum
 import logging
 import sqlite3
 import time
@@ -30,6 +32,20 @@ from typing import Any
 import numpy as np
 
 _log = logging.getLogger(__name__)
+
+
+# ------------------------------------------------------------------
+# Task lifecycle (Google A2A specification)
+# ------------------------------------------------------------------
+class TaskState(enum.Enum):
+    """A2A Task states per Google A2A specification.
+
+    Lifecycle: SUBMITTED → WORKING → COMPLETED | FAILED
+    """
+    SUBMITTED = "submitted"
+    WORKING = "working"
+    COMPLETED = "completed"
+    FAILED = "failed"
 
 
 # ------------------------------------------------------------------
@@ -67,6 +83,7 @@ class A2AMessage:
     # VSA 编码 (128-dim binary vector, 用于相似度路由)
     vsa_vector: np.ndarray | None = None
     timestamp: float = field(default_factory=time.time)
+    task_id: str | None = None  # optional link to an A2ATask
 
     def to_dict(self) -> dict:
         d = {
@@ -76,6 +93,7 @@ class A2AMessage:
             "msg_type": self.msg_type,
             "payload": self.payload,
             "timestamp": self.timestamp,
+            "task_id": self.task_id,
         }
         if self.vsa_vector is not None:
             d["vsa_vector"] = self.vsa_vector.astype(np.int8).tolist()
@@ -94,6 +112,7 @@ class A2AMessage:
             payload=d["payload"],
             vsa_vector=vsa,
             timestamp=d["timestamp"],
+            task_id=d.get("task_id"),
         )
 
 
@@ -105,6 +124,39 @@ class ConsensusResult:
     votes: dict[str, tuple[int, float]]  # agent_id → (hexagram, weight)
     num_agents: int
     consensus_type: str = "majority"  # majority | weighted | unanimity
+
+
+@dataclass
+class A2ATask:
+    """A2A Task — represents a unit of work between two agents.
+
+    Follows the Google A2A specification Task object with states:
+    submitted → working → completed / failed.
+    """
+    task_id: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
+    sender_id: str = ""
+    receiver_id: str = ""
+    description: str = ""
+    state: TaskState = TaskState.SUBMITTED
+    artifacts: list[Any] = field(default_factory=list)
+    history: list[A2AMessage] = field(default_factory=list)
+    created_at: float = field(default_factory=time.time)
+    updated_at: float = field(default_factory=time.time)
+    error: str = ""
+
+    def to_dict(self) -> dict:
+        return {
+            "task_id": self.task_id,
+            "sender_id": self.sender_id,
+            "receiver_id": self.receiver_id,
+            "description": self.description,
+            "state": self.state.value,
+            "artifacts": self.artifacts,
+            "history": [m.to_dict() for m in self.history],
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+            "error": self.error,
+        }
 
 
 # ------------------------------------------------------------------
@@ -141,6 +193,8 @@ class A2ACoordinator:
         self._message_log: list[A2AMessage] = []
         self._max_log_size = max_log_size
         self._palace_agents: dict[int, list[str]] = {i: [] for i in range(1, 10)}
+        # Task lifecycle (Google A2A spec)
+        self._tasks: dict[str, A2ATask] = {}  # task_id → A2ATask
         # P2 FIX: SQLite persistence for message log
         self._db_path: str | None = db_path
         self._db_conn: sqlite3.Connection | None = None
@@ -302,6 +356,92 @@ class A2ACoordinator:
         )
         self.send(msg)
         return msg
+
+    # ------------------------------------------------------------------
+    # Task lifecycle (Google A2A specification)
+    # ------------------------------------------------------------------
+    def submit_task(
+        self, sender_id: str, receiver_id: str, description: str = "",
+    ) -> A2ATask:
+        """Create a new task in SUBMITTED state.
+
+        The sender delegates work to the receiver.  The task starts
+        in :attr:`TaskState.SUBMITTED` and must be transitioned to
+        :attr:`TaskState.WORKING` via :meth:`start_task`.
+        """
+        task = A2ATask(
+            sender_id=sender_id,
+            receiver_id=receiver_id,
+            description=description,
+            state=TaskState.SUBMITTED,
+        )
+        self._tasks[task.task_id] = task
+        return task
+
+    def start_task(self, task_id: str) -> A2ATask:
+        """Transition a task from SUBMITTED to WORKING.
+
+        Raises :class:`KeyError` if the task does not exist.
+        Raises :class:`ValueError` if the task is not in SUBMITTED state.
+        """
+        task = self._tasks[task_id]
+        if task.state != TaskState.SUBMITTED:
+            raise ValueError(
+                f"Task {task_id} is {task.state.value}, expected SUBMITTED"
+            )
+        task.state = TaskState.WORKING
+        task.updated_at = time.time()
+        return task
+
+    def complete_task(
+        self, task_id: str, artifacts: list[Any] | None = None,
+    ) -> A2ATask:
+        """Transition a task from WORKING to COMPLETED.
+
+        Optionally attach artifacts (results) produced by the task.
+        """
+        task = self._tasks[task_id]
+        if task.state != TaskState.WORKING:
+            raise ValueError(
+                f"Task {task_id} is {task.state.value}, expected WORKING"
+            )
+        task.state = TaskState.COMPLETED
+        if artifacts is not None:
+            task.artifacts = artifacts
+        task.updated_at = time.time()
+        return task
+
+    def fail_task(self, task_id: str, error: str = "") -> A2ATask:
+        """Transition a task from WORKING to FAILED.
+
+        Optionally record an error description.
+        """
+        task = self._tasks[task_id]
+        if task.state != TaskState.WORKING:
+            raise ValueError(
+                f"Task {task_id} is {task.state.value}, expected WORKING"
+            )
+        task.state = TaskState.FAILED
+        task.error = error
+        task.updated_at = time.time()
+        return task
+
+    def get_task(self, task_id: str) -> A2ATask | None:
+        """Retrieve a task by ID, or ``None`` if not found."""
+        return self._tasks.get(task_id)
+
+    def list_tasks(self, agent_id: str | None = None) -> list[A2ATask]:
+        """List all tasks, optionally filtered by agent involvement.
+
+        When *agent_id* is given, returns tasks where the agent is
+        either the sender or the receiver.
+        """
+        if agent_id is None:
+            return list(self._tasks.values())
+        return [
+            t for t in self._tasks.values()
+            if t.sender_id == agent_id or t.receiver_id == agent_id
+        ]
 
     # ------------------------------------------------------------------
     # 共识
